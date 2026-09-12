@@ -7,12 +7,14 @@ import androidx.fragment.app.FragmentActivity
 import at.websters.tabbyandroid.data.local.VaultGuard
 
 /**
- * Biometric-or-device-PIN prompts bound to the Keystore guard key.
+ * Biometric-or-device-PIN prompts guarding the vault passphrase.
  *
- * Prompts always use a CryptoObject: without it the system prompt does NOT
- * authorize Keystore keys, and decryption would fail right after a
- * "successful" scan. Two-phase flow: try the cipher, and only on
- * UserNotAuthenticatedException show the prompt, then retry once.
+ * Every guarded unlock/seal shows the system prompt first (never silently
+ * reusing an auth window): on success the Keystore validity window opened by
+ * that very authentication covers the immediately following crypto op in
+ * [VaultGuard]. No CryptoObject is attached on purpose — the prompt gates
+ * *our* access decision, while the short Keystore window keeps the key itself
+ * bound to fresh user verification.
  */
 object Biometrics {
     private const val AUTH = androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG or

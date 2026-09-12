@@ -32,6 +32,12 @@ the same key. Never commit keystores or passwords (both live outside git).
   clobber your desktop config. Merge is non-destructive: unmanaged server entries,
   private-key refs, passwords, scripts and forwards are preserved; deletes propagate
   via tombstones. HTTPS enforced (no cleartext sync).
+- **Vault-encrypted configs**: fully-encrypted Tabby configs decrypt on-device
+  (exact desktop algorithm: PBKDF2-SHA512 ×100000 → AES-256-CBC). The vault
+  passphrase is asked on-device, never logged, and unlocks per your choice:
+  every time (default), remember forever (opt-in, encrypted store), or
+  biometrics/device PIN on every unlock (Keystore-guarded, always prompts).
+  Upload re-encrypts with fresh salt/IV; unmanaged entries and secrets survive.
 - **Hosts (Termius-like)**: bottom search, quick-connect `user@host:port`,
   nestable folders (incl. Termius `parentGroupId` imports), collapsible sections,
   pin hosts/folders to the top with manual ordering, manual add/edit/delete.
@@ -75,7 +81,7 @@ Never commit real tokens. The app never logs tokens/passwords/keys.
 ./gradlew :app:lintDebug
 ```
 
-48 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
+65 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
 folder-tree (nesting, orphans, cycles), terminal buffer + key bytes, SSH key
 generation, sync API (auth header, HTTPS rules, error mapping), quick-connect.
 
