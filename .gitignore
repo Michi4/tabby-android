@@ -1,0 +1,15 @@
+# Gradle
+.gradle/
+build/
+.kotlin/
+# Android
+local.properties
+*.iml
+.idea/
+.DS_Store
+# Keystore
+*.jks
+*.keystore
+# Tokens - never commit real sync tokens
+local_token.properties
+tabby_token.txt
