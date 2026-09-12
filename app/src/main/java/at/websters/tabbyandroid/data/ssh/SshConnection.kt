@@ -46,6 +46,8 @@ class SshConnection(
     private var session: Session? = null
     private var channel: ChannelShell? = null
     private var readerJob: Job? = null
+    /** Our end of the stdin pipe (canonical JSch shell input pattern). */
+    private var shellInput: java.io.PipedOutputStream? = null
 
     suspend fun connect(
         password: String,
@@ -106,6 +108,11 @@ class SshConnection(
         }
         val ch = s.openChannel("shell") as ChannelShell
         ch.setPtyType("xterm-256color", 80, 24, 0, 0)
+        // canonical stdin wiring: our pipe feeds the remote shell (getOutputStream
+        // is unreliable across JSch versions for interactive shells)
+        val pipeIn = java.io.PipedInputStream(64 * 1024)
+        shellInput = java.io.PipedOutputStream(pipeIn)
+        ch.setInputStream(pipeIn)
         ch.connect(10_000)
         session = s
         channel = ch
@@ -144,8 +151,8 @@ class SshConnection(
 
     fun send(text: String) {
         try {
-            channel?.outputStream?.write(text.toByteArray())
-            channel?.outputStream?.flush()
+            shellInput?.write(text.toByteArray())
+            shellInput?.flush()
         } catch (_: Exception) {
         }
     }
@@ -154,6 +161,7 @@ class SshConnection(
 
     override fun close() {
         try { readerJob?.cancel() } catch (_: Exception) {}
+        try { shellInput?.close() } catch (_: Exception) {}
         try { channel?.disconnect() } catch (_: Exception) {}
         try { session?.disconnect() } catch (_: Exception) {}
         _state.value = SshState.DISCONNECTED

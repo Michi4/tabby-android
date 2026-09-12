@@ -2,10 +2,8 @@ package at.websters.tabbyandroid.ui.screens
 
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -59,13 +58,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -79,6 +80,7 @@ import androidx.compose.ui.unit.sp
 import at.websters.tabbyandroid.data.ssh.CtrlKeys
 import at.websters.tabbyandroid.data.ssh.SshState
 import at.websters.tabbyandroid.data.ssh.TerminalBuffer
+import at.websters.tabbyandroid.data.ssh.diffEdit
 import at.websters.tabbyandroid.ui.state.TerminalTabsViewModel
 import at.websters.tabbyandroid.ui.theme.statusColor
 import at.websters.tabbyandroid.ui.theme.termColor
@@ -123,7 +125,9 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
                 if (active != null) {
                     val status by active.conn.status.collectAsState()
                     Text(
-                        "${active.profile.label()} • $status",
+                        listOf(active.profile.label(), status)
+                            .filter { it.isNotBlank() }
+                            .joinToString(" • "),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -228,14 +232,11 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
-    val keyboard = LocalSoftwareKeyboardController.current
-    val focusRequester = remember { FocusRequester() }
     val state by tab.conn.state.collectAsState()
     val connStatus by tab.conn.status.collectAsState()
     val version by tab.conn.buffer.updates.collectAsState()
@@ -245,7 +246,8 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
     var pwVisible by remember { mutableStateOf(false) }
     var ctrl by remember(tab.id) { mutableStateOf(false) }
     var alt by remember(tab.id) { mutableStateOf(false) }
-    var keysOpen by remember(tab.id) { mutableStateOf(false) }
+    var keysOpen by remember(tab.id) { mutableStateOf(true) }
+    var localEcho by remember(tab.id) { mutableStateOf(false) }
     var password by remember(tab.id) { mutableStateOf(SessionPasswords.take(tab.profile.id)) }
     val scroll = rememberScrollState()
 
@@ -257,14 +259,16 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
     // key material + password, taken once per tab and remembered across retries
     val keyMat = remember(tab.id) { SessionKeys.take(tab.profile.id) }
 
-    fun focusKeyboard() {
-        focusRequester.requestFocus()
-        keyboard?.show()
-    }
-
-    // typing works with zero taps: focus the direct-input field on connect
-    LaunchedEffect(state) {
-        if (state == SshState.CONNECTED) focusKeyboard()
+    fun sendTermChar(ch: Char) {
+        when {
+            ch == '\n' -> tab.conn.send("\r")
+            ctrl -> {
+                val b = if (ch.isLetter()) CtrlKeys.ctrlByte(ch) else null
+                if (b != null) tab.conn.send(CtrlKeys.byteString(b)) else tab.conn.send(ch.toString())
+            }
+            alt -> tab.conn.send(CtrlKeys.altSeq(ch))
+            else -> tab.conn.send(ch.toString())
+        }
     }
 
     Column(modifier.fillMaxSize()) {
@@ -274,9 +278,6 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
                 .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = { focusKeyboard() }) {
-            Icon(Icons.Filled.Keyboard, "Show keyboard")
-        }
         IconButton(onClick = { keysOpen = !keysOpen }) {
                 Icon(
                     if (keysOpen) Icons.Filled.KeyboardHide else Icons.Filled.Keyboard,
@@ -293,6 +294,8 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
             FilterChip(selected = follow, onClick = { follow = !follow },
                 label = { Text("Follow") },
                 leadingIcon = { Icon(Icons.Filled.VerticalAlignBottom, null) })
+            FilterChip(selected = localEcho, onClick = { localEcho = !localEcho },
+                label = { Text("Echo") })
             FilterChip(selected = ctrl, onClick = { ctrl = !ctrl }, label = { Text("CTRL") })
             FilterChip(selected = alt, onClick = { alt = !alt }, label = { Text("ALT") })
         IconButton(onClick = {
@@ -312,52 +315,69 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
             }
         }
 
-        // ---- screen: tap to type, long-press a line to copy it ----
+        // ---- screen IS a text field: tapping focuses natively (framework path),
+        // typing/deleting forwards straight into SSH, selection gives native copy.
         val rows = tab.conn.buffer.rows
-        val visible = snapshot.lines.takeLast(rows)
+        val primary = MaterialTheme.colorScheme.primary
+        val rendered = remember(version, tab.id, primary) { renderScreen(snapshot, rows, primary) }
+        var field by remember(tab.id) { mutableStateOf(TextFieldValue("")) }
+        // last server text we have shown; used to reconcile without yanking
+        // freshly typed text out from under the keyboard (that desyncs IMEs)
+        var shownServerText by remember(tab.id) { mutableStateOf("") }
+        // show live server output - but only when the user hasn't typed ahead
+        // of it (their keystrokes were already forwarded at press time and the
+        // echo will catch the screen up; yanking causes lost/double input)
+        LaunchedEffect(rendered) {
+            if (field.text == shownServerText) {
+                field = TextFieldValue(rendered, TextRange(rendered.length))
+            }
+            shownServerText = rendered.text
+        }
         Column(
             Modifier.weight(1f).fillMaxWidth()
                 .background(Color.Black)
                 .padding(8.dp)
                 .verticalScroll(scroll),
         ) {
-            visible.forEachIndexed { i, line ->
-                val lineText = line.joinToString("") { it.ch.toString() }.trimEnd()
-                Row(
-                    Modifier.fillMaxWidth().combinedClickable(
-                        onClick = { focusKeyboard() },
-                        onLongClick = {
-                            if (lineText.isNotBlank()) {
-                                at.websters.tabbyandroid.ui.util.copySensitive(context, lineText)
-                                Toast.makeText(context, "Line copied", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                    ),
-                ) {
-                    TerminalLine(
-                        line = line,
-                        cursorCol = if (i == snapshot.cursorRow) snapshot.cursorCol else null,
-                        fontSizeSp = fontSize,
-                    )
-                }
-            }
-            // invisible direct-typing field: system keyboard writes straight into SSH
-            DirectInput(
-                modifier = Modifier.size(1.dp).focusRequester(focusRequester),
-                tabId = tab.id,
-                onType = { ch ->
-                    when {
-                        ch == '\n' -> tab.conn.send("\r")
-                        ctrl -> {
-                            val b = if (ch.isLetter()) CtrlKeys.ctrlByte(ch) else null
-                            if (b != null) tab.conn.send(CtrlKeys.byteString(b)) else tab.conn.send(ch.toString())
-                        }
-                        alt -> tab.conn.send(CtrlKeys.altSeq(ch))
-                        else -> tab.conn.send(ch.toString())
+        BasicTextField(
+            value = field,
+            onValueChange = { nv ->
+                if (nv.text != field.text) {
+                    val (del, added) = diffEdit(field.text, nv.text)
+                    repeat(del) { tab.conn.send(CtrlKeys.byteString(127.toByte())) }
+                    for (ch in added) sendTermChar(ch)
+                    // local echo (off by default): show keystrokes instantly without
+                    // waiting for server round-trip; also makes input observable in tests
+                    if (localEcho && added.isNotEmpty()) {
+                        tab.conn.buffer.feed(added.toByteArray())
                     }
-                },
-                onDelete = { tab.conn.send(CtrlKeys.byteString(127.toByte())) },
-            )
+                }
+                // always keep what the keyboard committed: resetting here would
+                // desync Gboard's text model and eat keystrokes
+                field = nv
+            },
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = TextStyle(
+                color = Color.White,
+                fontFamily = FontFamily.Monospace,
+                fontSize = fontSize.sp,
+                lineHeight = (fontSize + 5).sp,
+            ),
+            cursorBrush = SolidColor(Color.Transparent), // our own block cursor is rendered
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.None,
+                autoCorrect = false,
+            ),
+            keyboardActions = KeyboardActions(
+                // some keyboards send an IME action instead of a newline (esp. on
+                // password fields): every action key means "run the line"
+                onDone = { tab.conn.send("\r") },
+                onGo = { tab.conn.send("\r") },
+                onSearch = { tab.conn.send("\r") },
+                onSend = { tab.conn.send("\r") },
+            ),
+        )
         }
 
         if (state == SshState.ERROR) {
@@ -401,11 +421,11 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
             }
         }
 
-        // ---- extended keyboard ----
+        // ---- extended keyboard: symbols + arrows always visible, rest expands ----
         KeyRow(SYMBOL_KEYS) { tab.conn.send(it) }
+        KeyRow(NAV_KEYS) { tab.conn.send(it) }
         AnimatedVisibility(visible = keysOpen) {
             Column {
-                KeyRow(NAV_KEYS) { tab.conn.send(it) }
                 KeyRow(FN_KEYS) { tab.conn.send(it) }
                 KeyRow(COMBO_KEYS) { tab.conn.send(it) }
             }
@@ -431,37 +451,58 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
 }
 
 /**
- * Invisible text field that turns the system keyboard into a terminal keyboard:
- * every typed char is forwarded immediately, deletions become DEL.
- * Password keyboard type is deliberate: it disables composing/autocorrect so
- * each key arrives as a direct commit (normal text fields batch edits through
- * the composing region, which fights the send-and-reset loop).
+ * Renders the terminal screen as styled text (colors + bold + block cursor),
+ * which the screen text field displays and the user can select/copy natively.
  */
-@Composable
-private fun DirectInput(modifier: Modifier, tabId: String, onType: (Char) -> Unit, onDelete: () -> Unit) {
-    val sentinel = remember { 65279.toChar().toString() }
-    var hidden by remember(tabId) { mutableStateOf(sentinel) }
-    BasicTextField(
-        value = hidden,
-        onValueChange = { nv ->
-            if (nv.isEmpty()) {
-                onDelete()
-            } else if (nv.startsWith(sentinel)) {
-                for (ch in nv.drop(sentinel.length)) onType(ch)
-            } else {
-                // keyboard replaced the content (sentinel gone) — forward all of it
-                for (ch in nv) onType(ch)
+private fun renderScreen(
+    snapshot: TerminalBuffer.Snapshot,
+    rows: Int,
+    primary: androidx.compose.ui.graphics.Color,
+): AnnotatedString {
+    return androidx.compose.ui.text.buildAnnotatedString {
+        val visible = snapshot.lines.takeLast(rows)
+        visible.forEachIndexed { i, line ->
+            var fg = -1
+            var bold = false
+            val sb = StringBuilder()
+            fun flush() {
+                if (sb.isNotEmpty()) {
+                    pushStyle(
+                        SpanStyle(
+                            color = termColor(fg, true),
+                            fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+                        )
+                    )
+                    append(sb.toString())
+                    pop()
+                    sb.clear()
+                }
             }
-            if (nv != sentinel) hidden = sentinel
-        },
-        modifier = modifier,
-        keyboardOptions = KeyboardOptions(
-            keyboardType = KeyboardType.Password,
-            imeAction = ImeAction.None,
-            autoCorrect = false,
-        ),
-        textStyle = TextStyle(fontSize = 1.sp, color = Color.Transparent),
-    )
+            line.forEachIndexed { idx, cell ->
+                if (i == snapshot.cursorRow && idx == snapshot.cursorCol) {
+                    flush()
+                    pushStyle(SpanStyle(color = primary, fontWeight = FontWeight.Bold))
+                    append("\u258A")
+                    pop()
+                    return@forEachIndexed
+                }
+                if (cell.fg != fg || cell.bold != bold) {
+                    flush()
+                    fg = cell.fg
+                    bold = cell.bold
+                }
+                sb.append(cell.ch)
+            }
+            if (i == snapshot.cursorRow && snapshot.cursorCol >= line.size) {
+                flush()
+                pushStyle(SpanStyle(color = primary, fontWeight = FontWeight.Bold))
+                append("\u258A")
+                pop()
+            }
+            flush()
+            if (i < visible.size - 1) append("\n")
+        }
+    }
 }
 
 @Composable
@@ -484,7 +525,7 @@ private fun KeyRow(keys: List<Pair<String, String>>, onSend: (String) -> Unit) {
 // NOTE: ESC is factored into the ESC constant (0x1B) so no raw control bytes
 // ever appear in source. Ctrl+X / Tab are written as explicit unicode escapes.
 internal val SYMBOL_KEYS = listOf(
-    "Esc" to ESC, "Tab" to "\u0009",
+    "Esc" to ESC, "Tab" to "\u0009", "Enter" to "\r",
     "|" to "|", "~" to "~", "-" to "-", "_" to "_",
     "/" to "/", "\\" to "\\", ":" to ":", ";" to ";",
     "\"" to "\"", "'" to "'", "$" to "$", "&" to "&",
@@ -493,6 +534,7 @@ internal val SYMBOL_KEYS = listOf(
 internal val NAV_KEYS = listOf(
     "<-" to ESC + "[D", "Up" to ESC + "[A", "Dn" to ESC + "[B", "->" to ESC + "[C",
     "Home" to ESC + "[H", "End" to ESC + "[F", "PgUp" to ESC + "[5~", "PgDn" to ESC + "[6~",
+    "Ins" to ESC + "[2~", "Del" to ESC + "[3~",
 )
 internal val FN_KEYS = listOf(
     "F1" to ESC + "OP", "F2" to ESC + "OQ", "F3" to ESC + "OR", "F4" to ESC + "OS",
@@ -504,54 +546,3 @@ internal val COMBO_KEYS = listOf(
     "Ctrl+A" to "\u0001", "Ctrl+E" to "\u0005", "Ctrl+K" to "\u000B",
     "Ctrl+L" to "\u000C", "Ctrl+U" to "\u0015", "Ctrl+W" to "\u0017", "Ctrl+R" to "\u0012",
 )
-
-@Composable
-private fun TerminalLine(
-    line: List<TerminalBuffer.Cell>,
-    cursorCol: Int?,
-    fontSizeSp: Int,
-) {
-    @Composable
-    fun run(text: String, fg: Int) {
-        if (text.isNotEmpty()) {
-            Text(
-                text,
-                style = TextStyle(
-                    color = termColor(fg, true),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = fontSizeSp.sp,
-                ),
-            )
-        }
-    }
-    @Composable
-    fun cursor() {
-        Text(
-            "▊",
-            style = TextStyle(
-                color = MaterialTheme.colorScheme.primary,
-                fontFamily = FontFamily.Monospace,
-                fontSize = fontSizeSp.sp,
-            ),
-        )
-    }
-    Row {
-        val sb = StringBuilder()
-        var fg = -1
-        line.forEachIndexed { idx, cell ->
-            if (idx == cursorCol) {
-                run(sb.toString(), fg)
-                sb.clear()
-                cursor()
-            }
-            if (cell.fg != fg) {
-                run(sb.toString(), fg)
-                sb.clear()
-                fg = cell.fg
-            }
-            sb.append(cell.ch)
-        }
-        run(sb.toString(), fg)
-        if (cursorCol != null && cursorCol >= line.size) cursor()
-    }
-}
