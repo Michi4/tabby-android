@@ -45,6 +45,9 @@ class SshConnectionLiveTest {
             assertTrue("connect failed: ${r.exceptionOrNull()}", r.isSuccess)
             assertEquals(SshState.CONNECTED, conn.state.value)
             conn.send("echo LIVEPROBE987\n")
+            // CR variant: does a lone carriage return execute?
+            conn.send("echo CRPROBE654")
+            conn.send("\r")
             withTimeout(15_000) {
                 while (!conn.buffer.visibleText().contains("LIVEPROBE987")) {
                     delay(200)
@@ -52,6 +55,13 @@ class SshConnectionLiveTest {
             }
             val text = conn.buffer.visibleText()
             assertTrue("no echo/output, got:\n$text", text.contains("LIVEPROBE987"))
+            // CR check: typed line echoes once; a second occurrence means it EXECUTED
+            withTimeout(10_000) {
+                while (conn.buffer.visibleText().split("CRPROBE654").size < 3) {
+                    delay(200)
+                }
+            }
+            println("CR-EXECUTES: lone carriage return runs the command")
         } finally {
             conn.close()
             knownHosts.delete()

@@ -124,8 +124,8 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
                 )
                 if (active != null) {
                     val status by active.conn.status.collectAsState()
-                    Text(
-                        listOf(active.profile.label(), status)
+                        Text(
+                            listOf(active.profile.label(), status)
                             .filter { it.isNotBlank() }
                             .joinToString(" • "),
                         style = MaterialTheme.typography.labelSmall,
