@@ -295,10 +295,10 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
                 leadingIcon = { Icon(Icons.Filled.VerticalAlignBottom, null) })
             FilterChip(selected = ctrl, onClick = { ctrl = !ctrl }, label = { Text("CTRL") })
             FilterChip(selected = alt, onClick = { alt = !alt }, label = { Text("ALT") })
-            IconButton(onClick = {
-                clipboard.setText(AnnotatedString(tab.conn.buffer.visibleText()))
-                Toast.makeText(context, "Screen copied", Toast.LENGTH_SHORT).show()
-            }) { Icon(Icons.Filled.ContentCopy, "Copy screen") }
+        IconButton(onClick = {
+            at.websters.tabbyandroid.ui.util.copySensitive(context, tab.conn.buffer.visibleText())
+            Toast.makeText(context, "Screen copied", Toast.LENGTH_SHORT).show()
+        }) { Icon(Icons.Filled.ContentCopy, "Copy screen") }
             IconButton(onClick = {
                 clipboard.getText()?.text?.let { tab.conn.send(it) }
             }) { Icon(Icons.Filled.ContentPaste, "Paste") }
@@ -328,7 +328,7 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
                         onClick = { focusKeyboard() },
                         onLongClick = {
                             if (lineText.isNotBlank()) {
-                                clipboard.setText(AnnotatedString(lineText))
+                                at.websters.tabbyandroid.ui.util.copySensitive(context, lineText)
                                 Toast.makeText(context, "Line copied", Toast.LENGTH_SHORT).show()
                             }
                         },

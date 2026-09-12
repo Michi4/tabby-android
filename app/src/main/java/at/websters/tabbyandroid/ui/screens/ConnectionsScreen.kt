@@ -545,7 +545,7 @@ private fun ConnectDialog(
 ) {
     val scope = rememberCoroutineScope()
     val keys by keysVm.keys.collectAsState()
-    var password by remember(profile.id) { mutableStateOf(vm.getPassword(profile.id)) }
+    var password by remember(profile.id) { mutableStateOf("") }
     var pwVisible by remember { mutableStateOf(false) }
     var keyId by remember(profile.id) { mutableStateOf(profile.keyId) }
     var showKeys by remember { mutableStateOf(false) }
@@ -593,6 +593,7 @@ private fun ConnectDialog(
                 OutlinedTextField(
                     value = password, onValueChange = { password = it },
                     label = { Text(if (keyId != null) "Key passphrase (if any)" else "Password") },
+                    supportingText = { Text("Saved — leave blank to reuse") },
                     singleLine = true,
                     visualTransformation = if (pwVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
@@ -613,8 +614,10 @@ private fun ConnectDialog(
                     } else if (keyId != profile.keyId) {
                         vm.updateSyncedProfile(updated)
                     }
+                    // blank = reuse the stored secret (never prefilled into UI state)
+                    val effectivePw = password.ifBlank { vm.getPassword(updated.id) }
                     val key = keyId?.let { keysVm.loadKey(it) }
-                    onConnect(updated, password, key?.first, key?.second.orEmpty())
+                    onConnect(updated, effectivePw, key?.first, key?.second.orEmpty())
                 }
             }) { Text("Connect") }
         },

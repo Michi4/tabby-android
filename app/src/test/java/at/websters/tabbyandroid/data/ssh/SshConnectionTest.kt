@@ -39,4 +39,18 @@ class SshConnectionTest {
         assertTrue(msg.contains("No shared SSH algorithms"))
         assertTrue(msg.contains("ssh-ed25519"))
     }
+
+    @Test fun changedKeyIsHardBlock() {
+        val msg = conn().friendlyError(Exception("HostKey has been changed: attacker.example"))
+        assertTrue(msg.contains("CHANGED"))
+        assertTrue(msg.contains("Forget saved host keys"))
+    }
+
+    @Test fun sha256FingerprintVector() {
+        // base64("abc") = "YWJj"; must match `echo -n abc | sha256sum` rendering
+        assertEquals(
+            "SHA256:ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0",
+            sha256Fingerprint("YWJj"),
+        )
+    }
 }

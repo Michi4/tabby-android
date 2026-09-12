@@ -10,6 +10,12 @@ local.properties
 # Keystore
 *.jks
 *.keystore
+# Keys/certs - never commit real key material
+*.pem
+*.key
+*.p12
+*.pfx
+google-services.json
 # Tokens - never commit real sync tokens
 local_token.properties
 tabby_token.txt

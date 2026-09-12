@@ -35,11 +35,25 @@ object TabbyYamlParser {
             return emptyList()
         }
         if (loaded !is Map<*, *>) return emptyList()
-        val profiles = loaded["profiles"] as? List<*> ?: run {
-            return emptyList()
-        }
-        val groups = parseGroups(loaded)
+        return parseSshProfilesFromMap(loaded, originPrefix)
+    }
+
+    /** Same as [parseSshProfiles] but from an already-parsed map (e.g. decrypted vault JSON). */
+    fun parseSshProfilesFromMap(root: Map<*, *>, originPrefix: String): List<SshProfile> {
+        val profiles = root["profiles"] as? List<*> ?: return emptyList()
+        val groups = parseGroups(root)
         return profiles.mapNotNull { parseOne(it, originPrefix, groups) }
+    }
+
+    /** Loads remote config content (YAML) into a plain map, or null when blank/invalid. */
+    fun loadContentMap(yamlContent: String): MutableMap<String, Any?>? {
+        if (yamlContent.isBlank() || yamlContent.trim() == "{}") return null
+        val loaded = runCatching { Yaml().load<Any>(yamlContent) }.getOrNull()
+        @Suppress("UNCHECKED_CAST")
+        return (loaded as? Map<*, *>)
+            ?.entries
+            ?.associate { (k, v) -> k.toString() to v }
+            ?.toMutableMap() as? MutableMap<String, Any?>
     }
 
     /** Resolves the config's `groups: [{id, name}]` (e.g. Termius-imported folders). */
@@ -69,7 +83,6 @@ object TabbyYamlParser {
         return if (loaded is Map<*, *>) parseGroupsFull(loaded) else emptyList()
     }
 
-    @Suppress("UNCHECKED_CAST")
     private fun parseOne(raw: Any?, originPrefix: String, groups: Map<String, String> = emptyMap()): SshProfile? {
         if (raw !is Map<*, *>) return null
         if ((raw["type"] as? String) != "ssh") return null

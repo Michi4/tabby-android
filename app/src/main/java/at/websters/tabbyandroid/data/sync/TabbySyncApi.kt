@@ -84,13 +84,17 @@ object TabbySyncApiFactory {
             )
         }
         val logging = HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC }
-        val client = OkHttpClient.Builder()
+        val builder = OkHttpClient.Builder()
             .addInterceptor(auth)
-            .addInterceptor(logging)
+            // Network logging only in debug builds: even BASIC must never ship,
+            // one constant change to HEADERS would print the Bearer token.
             .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
             .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .build()
+        if (at.websters.tabbyandroid.BuildConfig.DEBUG) {
+            builder.addInterceptor(logging)
+        }
+        val client = builder.build()
         return Retrofit.Builder()
             .baseUrl(base)
             .client(client)

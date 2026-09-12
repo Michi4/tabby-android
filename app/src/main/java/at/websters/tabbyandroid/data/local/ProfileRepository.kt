@@ -1,6 +1,7 @@
 package at.websters.tabbyandroid.data.local
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -33,8 +34,18 @@ class ProfileRepository(private val appContext: Context) {
         private val KEY_PINS = stringPreferencesKey("pins_json")
         private val KEY_COLLAPSED = stringPreferencesKey("collapsed_json")
         private val KEY_GROUPS = stringPreferencesKey("groups_json")
+        private val KEY_ALLOW_SCREEN = booleanPreferencesKey("allow_screen_capture")
         /** Where to get a sync service (self-hosted Tabby Web), shown as a Learn-more link. */
         const val SYNC_DOCS_URL = "https://github.com/Eugeny/tabby-web"
+    }
+
+    /** Opt-in to screenshots/screen sharing (default off = FLAG_SECURE). */
+    val allowScreenCapture: Flow<Boolean> = appContext.tabbyStore.data.map {
+        it[KEY_ALLOW_SCREEN] ?: false
+    }
+
+    suspend fun setAllowScreenCapture(allow: Boolean) {
+        appContext.tabbyStore.edit { it[KEY_ALLOW_SCREEN] = allow }
     }
 
     val accounts: Flow<List<SyncAccount>> = appContext.tabbyStore.data.map {

@@ -13,6 +13,8 @@ import at.websters.tabbyandroid.data.ssh.SshConnection
 import at.websters.tabbyandroid.data.sync.QuickConnectParser
 import at.websters.tabbyandroid.data.sync.SyncRepository
 import at.websters.tabbyandroid.data.sync.TabbyYamlSerializer
+import at.websters.tabbyandroid.data.sync.VaultLocks
+import at.websters.tabbyandroid.data.sync.VaultPassphrases
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -102,14 +104,18 @@ class ConnectionsViewModel(app: Application) : AndroidViewModel(app) {
                 // keep manual untouched; rebuild cached from all accounts
                 val errors = mutableListOf<String>()
                 val updatedAccounts = accounts.map { acc ->
-                    val r = sync.syncAccount(acc)
+                    val vaultPw = VaultPassphrases.peek(acc.id)
+                        ?: secrets.getVaultPassphrase(acc.id).takeIf { it.isNotBlank() }
+                    val r = sync.syncAccount(acc, vaultPw)
                     if (r.ok) {
                         merged += r.profiles
                         r.groups.forEach { mergedGroups.putIfAbsent(it.id, it) }
                         // Drop tombstones the server no longer has (deleted on desktop too).
                         repo.retainTombstones(acc.id, r.profiles.map { it.id }.toSet())
+                        VaultLocks.clear(acc.id)
                         acc.copy(lastSyncAtEpochMs = System.currentTimeMillis(), lastError = null)
                     } else {
+                        if (r.vaultLocked) VaultLocks.set(acc.id)
                         errors += "${acc.name}: ${r.error}"
                         acc.copy(lastError = r.error)
                     }
@@ -128,6 +134,26 @@ class ConnectionsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun dismissMessage() { _msg.value = null }
+
+    /**
+     * Unlocks a vault-encrypted config for this session. When [remember] is on,
+     * the passphrase is kept in encrypted storage (like a desktop keychain);
+     * otherwise it lives only in memory until the app dies.
+     */
+    fun unlockVault(account: SyncAccount, passphrase: String, remember: Boolean) {
+        viewModelScope.launch {
+            if (passphrase.isBlank()) return@launch
+            VaultPassphrases.put(account.id, passphrase)
+            secrets.putVaultPassphrase(account.id, if (remember) passphrase else "")
+            VaultLocks.clear(account.id)
+            syncAll()
+        }
+    }
+
+    fun forgetVaultPassphrase(account: SyncAccount) {
+        VaultPassphrases.clear(account.id)
+        viewModelScope.launch { secrets.putVaultPassphrase(account.id, "") }
+    }
 
     val pins: StateFlow<List<Pin>> = repo.pins
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -186,7 +212,8 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
     val active: StateFlow<String?> = _active
 
     fun open(profile: SshProfile): String {
-        val tab = Tab(profile = profile, conn = SshConnection(profile))
+        val knownHosts = java.io.File(getApplication<Application>().filesDir, "known_hosts")
+        val tab = Tab(profile = profile, conn = SshConnection(profile, knownHostsFile = knownHosts))
         _tabs.value = _tabs.value + tab
         _active.value = tab.id
         return tab.id
@@ -197,13 +224,21 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
     fun select(id: String) { _active.value = id }
 
     fun close(id: String) {
-        _tabs.value.find { it.id == id }?.conn?.close()
+        _tabs.value.find { it.id == id }?.let {
+            it.conn.close()
+            at.websters.tabbyandroid.ui.screens.SessionPasswords.take(it.profile.id)
+            at.websters.tabbyandroid.ui.screens.SessionKeys.take(it.profile.id)
+        }
         _tabs.value = _tabs.value.filterNot { it.id == id }
         if (_active.value == id) _active.value = _tabs.value.lastOrNull()?.id
     }
 
     override fun onCleared() {
-        _tabs.value.forEach { runCatching { it.conn.close() } }
+        _tabs.value.forEach {
+            runCatching { it.conn.close() }
+            at.websters.tabbyandroid.ui.screens.SessionPasswords.take(it.profile.id)
+            at.websters.tabbyandroid.ui.screens.SessionKeys.take(it.profile.id)
+        }
     }
 }
 
@@ -292,7 +327,9 @@ class SyncAccountsViewModel(app: Application) : AndroidViewModel(app) {
                     _msg.value = "Nothing to upload for '${account.name}'"
                     return@launch
                 }
-                val r = sync.upload(account, payload, stones)
+                val vaultPw = VaultPassphrases.peek(account.id)
+                    ?: secrets.getVaultPassphrase(account.id).takeIf { it.isNotBlank() }
+                val r = sync.upload(account, payload, stones, vaultPw)
                 if (r.ok) {
                     repo.clearTombstones(account.id, payload.map { it.id }.toSet() + stones)
                     saveAccountInternal(account.copy(lastSyncAtEpochMs = System.currentTimeMillis(), lastError = null))
@@ -300,6 +337,7 @@ class SyncAccountsViewModel(app: Application) : AndroidViewModel(app) {
                         (if (r.removed > 0) " (removed ${r.removed})" else "") +
                         " to '${account.selectedConfigName ?: account.name}'"
                 } else {
+                    if (r.vaultLocked) VaultLocks.set(account.id)
                     saveAccountInternal(account.copy(lastError = r.error))
                     _msg.value = "Upload failed: ${r.error}"
                 }
@@ -311,4 +349,18 @@ class SyncAccountsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun getToken(accountId: String): String = secrets.getAccountToken(accountId)
     fun dismiss() { _msg.value = null }
+
+    val allowScreen: StateFlow<Boolean> = repo.allowScreenCapture
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setAllowScreen(allow: Boolean) {
+        viewModelScope.launch { repo.setAllowScreenCapture(allow) }
+    }
+
+    fun forgetHostKeys() {
+        viewModelScope.launch {
+            at.websters.tabbyandroid.data.local.SecureTokenStorage(getApplication()).clearHostKeys()
+            _msg.value = "Saved host keys forgotten — servers will ask to verify again"
+        }
+    }
 }
