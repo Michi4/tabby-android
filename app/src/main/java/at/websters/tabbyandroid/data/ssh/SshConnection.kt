@@ -48,6 +48,17 @@ class SshConnection(
     private var readerJob: Job? = null
     /** Our end of the stdin pipe (canonical JSch shell input pattern). */
     private var shellInput: java.io.PipedOutputStream? = null
+    private var shellPipeIn: java.io.PipedInputStream? = null
+
+    /** DIAG-TEMP: pipe backlog (removed before release). */
+    fun debugPipe(): String {
+        val avail = try {
+            shellPipeIn?.available() ?: -1
+        } catch (_: Exception) {
+            -2
+        }
+        return "pipeIn=${shellPipeIn != null} avail=$avail"
+    }
 
     suspend fun connect(
         password: String,
@@ -90,8 +101,13 @@ class SshConnection(
         val cfg = Properties()
         cfg["StrictHostKeyChecking"] = "ask"
         s.setConfig(cfg)
-        s.setTimeout(15_000)
-        s.setServerAliveInterval((profile.keepaliveIntervalSec.coerceIn(0, 300) * 1000))
+            s.setTimeout(15_000)
+            s.setServerAliveInterval((profile.keepaliveIntervalSec.coerceIn(0, 300) * 1000))
+            // Dead-peer detection: after this many unanswered keepalives JSch
+            // drops the session instead of lingering as a zombie (e.g. USB
+            // tethering drops, captive portals). The reader then reports
+            // DISCONNECTED and the UI offers reconnect instead of silence.
+            s.setServerAliveCountMax(3)
         try {
             s.connect(15_000)
         } catch (e: Exception) {
@@ -112,6 +128,7 @@ class SshConnection(
         // is unreliable across JSch versions for interactive shells)
         val pipeIn = java.io.PipedInputStream(64 * 1024)
         shellInput = java.io.PipedOutputStream(pipeIn)
+        shellPipeIn = pipeIn
         ch.setInputStream(pipeIn)
         ch.connect(10_000)
         session = s

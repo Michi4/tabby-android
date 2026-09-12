@@ -127,7 +127,7 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
                         Text(
                             listOf(active.profile.label(), status)
                             .filter { it.isNotBlank() }
-                            .joinToString(" • "),
+                            .joinToString(" • ") + " [" + active.conn.debugPipe() + "]",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
