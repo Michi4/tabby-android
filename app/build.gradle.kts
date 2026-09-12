@@ -82,6 +82,10 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.7.7")
 
+    // Biometric / device-credential prompts + FragmentActivity for them
+    implementation("androidx.biometric:biometric:1.1.0")
+    implementation("androidx.fragment:fragment-ktx:1.8.3")
+
     // DataStore (accounts + cached profiles, no Room/KSP needed for v1)
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 

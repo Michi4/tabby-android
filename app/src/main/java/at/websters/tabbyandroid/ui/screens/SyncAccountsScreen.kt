@@ -19,8 +19,14 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.fragment.app.FragmentActivity
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -84,17 +90,19 @@ fun SyncAccountsScreen(
         }
     ) { pad ->
         LazyColumn(Modifier.fillMaxSize().padding(pad).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            item {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            "Unofficial community client — not affiliated with the Tabby developers.",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text("Config sync requires an instance of the Tabby Web service.")
-                        TextButton(onClick = { uriHandler.openUri(ProfileRepository.SYNC_DOCS_URL) }) {
-                            Text("Learn more")
+            if (accounts.isEmpty()) {
+                item {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                "Unofficial community client — not affiliated with the Tabby developers.",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text("Config sync requires an instance of the Tabby Web service.")
+                            TextButton(onClick = { uriHandler.openUri(ProfileRepository.SYNC_DOCS_URL) }) {
+                                Text("Learn more")
+                            }
                         }
                     }
                 }
@@ -131,7 +139,8 @@ fun SyncAccountsScreen(
                         if (acc.lastError != null) Text(acc.lastError, color = MaterialTheme.colorScheme.error)
                         if (acc.id in vaultLocked) {
                             VaultUnlockRow(
-                                onUnlock = { pw, remember -> connections.unlockVault(acc, pw, remember) },
+                                account = acc,
+                                connections = connections,
                                 enabled = !busy,
                             )
                         }
@@ -273,38 +282,143 @@ private fun PrivacyCard(vm: SyncAccountsViewModel) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun VaultUnlockRow(onUnlock: (passphrase: String, remember: Boolean) -> Unit, enabled: Boolean) {
-    var passphrase by remember { mutableStateOf("") }
-    var remember by remember { mutableStateOf(true) }
+private fun VaultUnlockRow(
+    account: SyncAccount,
+    connections: ConnectionsViewModel,
+    enabled: Boolean,
+) {
+    val modes by connections.vaultModes.collectAsState()
+    val sealedMap by connections.vaultSealed.collectAsState()
+    var passphrase by remember(account.id) { mutableStateOf("") }
+    var mode by remember(account.id) {
+        mutableStateOf(modes[account.id] ?: ProfileRepository.LOCK_SESSION)
+    }
     var pwVisible by remember { mutableStateOf(false) }
+    var modeMenu by remember { mutableStateOf(false) }
+    var bioError by remember { mutableStateOf<String?>(null) }
+    val activity = LocalContext.current as? FragmentActivity
+    val guardOk = remember(activity) {
+        activity?.let { at.websters.tabbyandroid.ui.util.Biometrics.canGuard(it) } ?: false
+    }
+    val hasSealed = sealedMap[account.id]?.isNotBlank() == true
+
+    fun modeLabel(m: String) = when (m) {
+        ProfileRepository.LOCK_FOREVER -> "Remember forever"
+        ProfileRepository.LOCK_GUARDED -> "Biometrics / device PIN"
+        else -> "Ask every time"
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
-            "This config is vault-encrypted. Enter the vault passphrase to unlock it. " +
-                "It is never logged and only sent to your own server inside the encrypted config.",
+            "This config is vault-encrypted. The passphrase is never logged and only " +
+                "unlocks your own server copy in memory.",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        OutlinedTextField(
-            value = passphrase, onValueChange = { passphrase = it },
-            label = { Text("Vault passphrase") }, singleLine = true,
-            visualTransformation = if (pwVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = {
-                IconButton(onClick = { pwVisible = !pwVisible }) {
-                    Icon(if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Show")
-                }
-            },
-        )
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Checkbox(checked = remember, onCheckedChange = { remember = it })
-            Text("Remember on this device", style = MaterialTheme.typography.bodyMedium)
+        ExposedDropdownMenuBox(expanded = modeMenu, onExpandedChange = { modeMenu = it }) {
+            OutlinedTextField(
+                value = modeLabel(mode),
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Unlock method") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(modeMenu) },
+                modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true).fillMaxWidth(),
+            )
+            ExposedDropdownMenu(expanded = modeMenu, onDismissRequest = { modeMenu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Ask every time (default)") },
+                    onClick = { mode = ProfileRepository.LOCK_SESSION; modeMenu = false },
+                )
+                DropdownMenuItem(
+                    text = { Text("Remember forever (encrypted, no prompts)") },
+                    onClick = { mode = ProfileRepository.LOCK_FOREVER; modeMenu = false },
+                )
+                DropdownMenuItem(
+                    text = { Text("Biometrics / device PIN (every unlock)") },
+                    enabled = guardOk,
+                    onClick = { mode = ProfileRepository.LOCK_GUARDED; modeMenu = false },
+                )
+            }
         }
-        Button(
-            onClick = { onUnlock(passphrase, remember); passphrase = "" },
-            enabled = enabled && passphrase.isNotBlank(),
-        ) { Text("Unlock & pull") }
+        if (mode == ProfileRepository.LOCK_GUARDED && !guardOk) {
+            Text(
+                "Biometrics and device PIN are unavailable — enroll one in system settings first.",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
+        if (mode != ProfileRepository.LOCK_GUARDED || !hasSealed) {
+            OutlinedTextField(
+                value = passphrase, onValueChange = { passphrase = it; bioError = null },
+                label = { Text("Vault passphrase") }, singleLine = true,
+                visualTransformation = if (pwVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(onClick = { pwVisible = !pwVisible }) {
+                        Icon(if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Show")
+                    }
+                },
+            )
+        }
+        if (bioError != null) {
+            Text(bioError!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelMedium)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            when (mode) {
+                ProfileRepository.LOCK_GUARDED -> {
+                    if (hasSealed) {
+                        Button(
+                            onClick = {
+                                val act = activity
+                                if (act == null) {
+                                    bioError = "Cannot show biometric prompt here"
+                                    return@Button
+                                }
+                                at.websters.tabbyandroid.ui.util.Biometrics.unlockWithGuard(
+                                    act, "Unlock vault", sealedMap[account.id].orEmpty(),
+                                    onOk = { connections.unlockVaultWithPlain(account, it) },
+                                    onErr = { bioError = it },
+                                )
+                            },
+                            enabled = enabled,
+                        ) { Text("Unlock with biometrics") }
+                    } else {
+                        Button(
+                            onClick = {
+                                val act = activity
+                                if (act == null) {
+                                    bioError = "Cannot show biometric prompt here"
+                                    return@Button
+                                }
+                                at.websters.tabbyandroid.ui.util.Biometrics.sealWithGuard(
+                                    act, "Protect vault passphrase", passphrase,
+                                    onOk = { blob ->
+                                        connections.finishGuardedEnroll(account, blob, passphrase)
+                                        passphrase = ""
+                                    },
+                                    onErr = { bioError = it },
+                                )
+                            },
+                            enabled = enabled && passphrase.isNotBlank() && guardOk,
+                        ) { Text("Protect with biometrics") }
+                    }
+                }
+                else -> {
+                    Button(
+                        onClick = {
+                            connections.unlockVault(account, passphrase, mode)
+                            passphrase = ""
+                        },
+                        enabled = enabled && passphrase.isNotBlank(),
+                    ) { Text("Unlock & pull") }
+                }
+            }
+            TextButton(onClick = { connections.forgetVaultPassphrase(account) }) { Text("Forget") }
+        }
     }
 }
+
 
 private fun ago(epochMs: Long): String {    val s = ((System.currentTimeMillis() - epochMs) / 1000).coerceAtLeast(0)
     return when {

@@ -4,7 +4,7 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
@@ -24,8 +24,9 @@ import kotlinx.coroutines.launch
  * handles display cutout + gesture nav via Scaffold insets.
  * Screenshots/screen capture are blocked by default (SSH shows live secrets);
  * the user can allow them in Sync → Privacy.
+ * FragmentActivity (not ComponentActivity) so screens can show biometric prompts.
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

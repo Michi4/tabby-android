@@ -38,7 +38,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -182,9 +182,6 @@ fun ConnectionsScreen(
 
     Scaffold(
         snackbarHost = { SnackbarHost(snack) },
-        floatingActionButton = {
-            FloatingActionButton(onClick = { showAdd = true }) { Icon(Icons.Filled.Add, "Add host") }
-        },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
             LazyColumn(
@@ -252,9 +249,9 @@ fun ConnectionsScreen(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                 )
             }
-            // thumb-friendly bottom search + sync (end-padded so the FAB never covers it)
+            // thumb-friendly bottom row: search + sync + add, all aligned
             Row(
-                Modifier.fillMaxWidth().padding(start = 12.dp, end = 92.dp, top = 6.dp, bottom = 6.dp),
+                Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -273,6 +270,9 @@ fun ConnectionsScreen(
                 IconButton(onClick = { vm.syncAll() }, enabled = !state.syncing) {
                     if (state.syncing) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                     else Icon(Icons.Filled.Refresh, "Pull from sync servers")
+                }
+                FilledTonalIconButton(onClick = { showAdd = true }) {
+                    Icon(Icons.Filled.Add, "Add host")
                 }
             }
         }

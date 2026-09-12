@@ -35,8 +35,14 @@ class ProfileRepository(private val appContext: Context) {
         private val KEY_COLLAPSED = stringPreferencesKey("collapsed_json")
         private val KEY_GROUPS = stringPreferencesKey("groups_json")
         private val KEY_ALLOW_SCREEN = booleanPreferencesKey("allow_screen_capture")
+        private val KEY_VAULT_LOCK = stringPreferencesKey("vault_lock_json")
+        private val KEY_VAULT_SEALED = stringPreferencesKey("vault_sealed_json")
         /** Where to get a sync service (self-hosted Tabby Web), shown as a Learn-more link. */
         const val SYNC_DOCS_URL = "https://github.com/Eugeny/tabby-web"
+        /** Vault lock modes: ask every time (default), remember, or biometric/PIN-guarded. */
+        const val LOCK_SESSION = "session"
+        const val LOCK_FOREVER = "forever"
+        const val LOCK_GUARDED = "guarded"
     }
 
     /** Opt-in to screenshots/screen sharing (default off = FLAG_SECURE). */
@@ -159,6 +165,48 @@ class ProfileRepository(private val appContext: Context) {
             )
         }
     }
+
+    /**
+     * Vault lock mode per account: `session` (ask every time, memory only -
+     * the default), `forever` (remember encrypted, no prompt), `guarded`
+     * (biometrics/device PIN on every unlock). Ids only, no secrets.
+     */
+    val vaultLockModes: Flow<Map<String, String>> = appContext.tabbyStore.data.map {
+        it[KEY_VAULT_LOCK]?.let { raw ->
+            runCatching {
+                json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), raw)
+            }.getOrDefault(emptyMap())
+        } ?: emptyMap()
+    }
+
+    suspend fun setVaultLockMode(accountId: String, mode: String) {
+        val all = vaultLockModes.first().toMutableMap()
+        all[accountId] = mode
+        appContext.tabbyStore.edit {
+            it[KEY_VAULT_LOCK] = json.encodeToString(MapSerializer(String.serializer(), String.serializer()), all)
+        }
+    }
+
+    suspend fun currentVaultLockModes(): Map<String, String> = vaultLockModes.first()
+
+    /** Keystore-guarded vault blobs per account (ciphertext only, safe anywhere). */
+    val vaultSealed: Flow<Map<String, String>> = appContext.tabbyStore.data.map {
+        it[KEY_VAULT_SEALED]?.let { raw ->
+            runCatching {
+                json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), raw)
+            }.getOrDefault(emptyMap())
+        } ?: emptyMap()
+    }
+
+    suspend fun saveVaultSealed(accountId: String, blob: String?) {
+        val all = vaultSealed.first().toMutableMap()
+        if (blob.isNullOrBlank()) all.remove(accountId) else all[accountId] = blob
+        appContext.tabbyStore.edit {
+            it[KEY_VAULT_SEALED] = json.encodeToString(MapSerializer(String.serializer(), String.serializer()), all)
+        }
+    }
+
+    suspend fun currentVaultSealed(): Map<String, String> = vaultSealed.first()
 
     /**
      * Tombstones: ids of synced profiles deleted on this device, per account.

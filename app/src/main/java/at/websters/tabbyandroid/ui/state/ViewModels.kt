@@ -104,8 +104,15 @@ class ConnectionsViewModel(app: Application) : AndroidViewModel(app) {
                 // keep manual untouched; rebuild cached from all accounts
                 val errors = mutableListOf<String>()
                 val updatedAccounts = accounts.map { acc ->
+                    // guarded vaults never auto-read: every unlock goes through biometrics
+                    val mode = repo.currentVaultLockModes()[acc.id]
+                        ?: ProfileRepository.LOCK_SESSION
                     val vaultPw = VaultPassphrases.peek(acc.id)
-                        ?: secrets.getVaultPassphrase(acc.id).takeIf { it.isNotBlank() }
+                        ?: if (mode == ProfileRepository.LOCK_FOREVER) {
+                            secrets.getVaultPassphrase(acc.id).takeIf { it.isNotBlank() }
+                        } else {
+                            null
+                        }
                     val r = sync.syncAccount(acc, vaultPw)
                     if (r.ok) {
                         merged += r.profiles
@@ -136,15 +143,51 @@ class ConnectionsViewModel(app: Application) : AndroidViewModel(app) {
     fun dismissMessage() { _msg.value = null }
 
     /**
-     * Unlocks a vault-encrypted config for this session. When [remember] is on,
-     * the passphrase is kept in encrypted storage (like a desktop keychain);
-     * otherwise it lives only in memory until the app dies.
+     * Unlocks a vault-encrypted config. [mode] is one of [ProfileRepository] lock modes:
+     * - session (default): memory only, asked again after restart;
+     * - forever: also kept encrypted (Keystore), no further prompts;
+     * - guarded: handled via biometrics - see [finishGuardedEnroll]/biometric unlock.
      */
-    fun unlockVault(account: SyncAccount, passphrase: String, remember: Boolean) {
+    fun unlockVault(account: SyncAccount, passphrase: String, mode: String) {
         viewModelScope.launch {
             if (passphrase.isBlank()) return@launch
-            VaultPassphrases.put(account.id, passphrase)
-            secrets.putVaultPassphrase(account.id, if (remember) passphrase else "")
+            repo.setVaultLockMode(account.id, mode)
+            when (mode) {
+                ProfileRepository.LOCK_FOREVER -> {
+                    VaultPassphrases.put(account.id, passphrase)
+                    secrets.putVaultPassphrase(account.id, passphrase)
+                }
+                ProfileRepository.LOCK_GUARDED -> {
+                    _msg.value = "Use biometrics to seal the passphrase first"
+                    return@launch
+                }
+                else -> {
+                    VaultPassphrases.put(account.id, passphrase)
+                    secrets.putVaultPassphrase(account.id, "")
+                    repo.saveVaultSealed(account.id, null)
+                }
+            }
+            VaultLocks.clear(account.id)
+            syncAll()
+        }
+    }
+
+    /** After a successful biometric open: session-only, then pull. */
+    fun unlockVaultWithPlain(account: SyncAccount, plain: String) {
+        viewModelScope.launch {
+            VaultPassphrases.put(account.id, plain)
+            VaultLocks.clear(account.id)
+            syncAll()
+        }
+    }
+
+    /** After sealing a passphrase behind biometrics: persist blob + mode, then pull. */
+    fun finishGuardedEnroll(account: SyncAccount, sealedBlob: String, plain: String) {
+        viewModelScope.launch {
+            repo.saveVaultSealed(account.id, sealedBlob)
+            repo.setVaultLockMode(account.id, ProfileRepository.LOCK_GUARDED)
+            secrets.putVaultPassphrase(account.id, "")
+            VaultPassphrases.put(account.id, plain)
             VaultLocks.clear(account.id)
             syncAll()
         }
@@ -152,8 +195,18 @@ class ConnectionsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun forgetVaultPassphrase(account: SyncAccount) {
         VaultPassphrases.clear(account.id)
-        viewModelScope.launch { secrets.putVaultPassphrase(account.id, "") }
+        viewModelScope.launch {
+            secrets.putVaultPassphrase(account.id, "")
+            repo.saveVaultSealed(account.id, null)
+            _msg.value = "Vault passphrase forgotten for '${account.name}'"
+        }
     }
+
+    val vaultModes: StateFlow<Map<String, String>> = repo.vaultLockModes
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    val vaultSealed: StateFlow<Map<String, String>> = repo.vaultSealed
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     val pins: StateFlow<List<Pin>> = repo.pins
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

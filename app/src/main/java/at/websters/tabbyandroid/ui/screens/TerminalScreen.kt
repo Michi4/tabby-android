@@ -192,7 +192,7 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
             Card(Modifier.padding(16.dp)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("No terminal tabs", style = MaterialTheme.typography.titleMedium)
-                    Text("Open a host from Hosts, or quick-connect:")
+                    Text("Open a host from Hosts, tap + at the top right, or start here:")
                     Button(onClick = { showQuick = true }) { Text("Quick connect") }
                 }
             }
