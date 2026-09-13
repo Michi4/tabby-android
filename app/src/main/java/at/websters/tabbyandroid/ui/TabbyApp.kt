@@ -1,5 +1,9 @@
 package at.websters.tabbyandroid.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudSync
@@ -30,6 +34,7 @@ object Routes {
     const val SYNC = "sync"
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TabbyApp(
     connections: ConnectionsViewModel,
@@ -40,8 +45,12 @@ fun TabbyApp(
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
 
+    // While the keyboard is open the bottom bar would sit behind it as dead
+    // space, pushing terminal keys needlessly high — hide it (all routes gain
+    // room; the bar returns the moment the keyboard closes).
     Scaffold(
         bottomBar = {
+            AnimatedVisibility(visible = !WindowInsets.isImeVisible) {
             NavigationBar {
                 NavigationBarItem(
                     selected = route == Routes.CONNECTIONS,
@@ -61,6 +70,7 @@ fun TabbyApp(
                     icon = { Icon(Icons.Filled.CloudSync, null) },
                     label = { Text("Sync") },
                 )
+            }
             }
         }
     ) { pad ->

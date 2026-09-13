@@ -56,6 +56,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -271,7 +272,8 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
     var ctrl by remember(tab.id) { mutableStateOf(false) }
     var alt by remember(tab.id) { mutableStateOf(false) }
     // extended-key rows on screen: 3 -> 2 -> 1 -> hidden, cycles on toggle
-    var keyRows by remember(tab.id) { mutableIntStateOf(3) }
+    // (saveable: survives rotation per tab)
+    var keyRows by rememberSaveable(tab.id) { mutableIntStateOf(3) }
     var password by remember(tab.id) { mutableStateOf(SessionPasswords.take(tab.profile.id)) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
