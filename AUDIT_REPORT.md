@@ -295,14 +295,16 @@ Checked OK: HTTPS enforcement + normalize (`TabbySyncApi.kt:39-57`); HTTP/TLS/DN
 | 2 API-client | Clean (H6 guarded) | — |
 | 3 Security | Clean (handshake driven on jsch 2.28.7) | — |
 | 4 Data | Clean (H7 quarantined) | — |
-| 5 Infra | Clean except CI first-run | CI executes on push (happening next) |
+| 5 Infra | Clean — CI green on push (verified ×2) | — |
 | 6 Journeys | Driven: SSH+TOFU+TUIs, demo, screenshot, nav | biometric only |
 | 7 Testing | 134/134 + E2E 1/1 green | breadth only (server/biometric flows) |
 
 ## Go / No-Go: **GO (with noted follow-ups)**
 
-Shippable as a GitHub-release APK. Remaining follow-ups, in order:
-1. First CI run on push must be green (watching it now).
+v1.4.0 released 2026-09-13: tag `v1.4.0`, signed APK attached to the GitHub
+release (same cert as 1.3.0 — updates install cleanly), CI green on both pushes.
+Remaining follow-ups, in order:
+1. ~~First CI run on push must be green~~ — done, green twice.
 2. E2E breadth when a Tabby Web test server exists (upload/vault-remote flows).
 3. Biometric vault unlock drive-through if ever in doubt (code path reviewed, unchanged by audit).
 
