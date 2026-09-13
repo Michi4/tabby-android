@@ -19,14 +19,19 @@ import kotlinx.coroutines.withContext
 
 enum class SshState { DISCONNECTED, CONNECTING, CONNECTED, ERROR }
 
+/** Name of the OpenSSH known_hosts file JSch enforces (under app filesDir). */
+const val KNOWN_HOSTS_NAME = "known_hosts"
+
 /**
  * One live SSH shell. All blocking JSch I/O runs on Dispatchers.IO.
  *
  * Host-key verification (TOFU with pinning, Termius-like):
  * - known hosts live in an OpenSSH-format `known_hosts` file ([knownHostsFile]);
  * - unknown key -> [pendingHostKey] (type + SHA256 fingerprint) for explicit
- *   user accept; accepting appends to the file, so later connects are verified;
- * - a CHANGED key hard-fails (no accept path) -> possible MITM.
+ *   user accept; accepting saves the pin, so later connects are verified;
+ * - a CHANGED key stages the new key plus the old fingerprint for an
+ *   explicit warning dialog — accept only when the server was knowingly
+ *   reinstalled (possible MITM otherwise); accepting REPLACES the pin.
  */
 class SshConnection(
     val profile: SshProfile,
@@ -39,6 +44,10 @@ class SshConnection(
     val status: StateFlow<String> = _status
 
     @Volatile var pendingHostKey: String? = null
+        private set
+
+    /** True when the pending key REPLACES a previously saved one (possible MITM). */
+    @Volatile var pendingHostKeyChanged: Boolean = false
         private set
 
     @Volatile private var pendingKey: HostKey? = null
@@ -55,6 +64,8 @@ class SshConnection(
         privateKeyPassphrase: String? = null,
         acceptHostKey: Boolean = false,
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        pendingHostKey = null
+        pendingHostKeyChanged = false
         for (attempt in 0 until 2) {
             try {
                 openSession(password, privateKeyPem, privateKeyPassphrase)
@@ -101,6 +112,25 @@ class SshConnection(
             s.connect(15_000)
         } catch (e: Exception) {
             val msg = e.message.orEmpty()
+            if (msg.contains("has been changed", ignoreCase = true)) {
+                // saved pin differs from what the server offers now: stage the
+                // new key plus the old fingerprint so the UI can show a real
+                // review dialog (accept only if YOU reinstalled the server).
+                val hk = runCatching { s.hostKey }.getOrNull()
+                pendingKey = hk
+                pendingHostKeyChanged = true
+                val oldFp = readSavedFingerprint()
+                val offered = formatHostKey(profile.host, profile.port, hk)
+                pendingHostKey = buildString {
+                    append("Server key for ${profile.host}:${profile.port} CHANGED.")
+                    if (oldFp != null) append("\nSaved:   $oldFp")
+                    if (offered != null) append("\nOffered: $offered")
+                    if (oldFp == null && offered == null) append("\n$msg")
+                }
+                _state.value = SshState.ERROR
+                _status.value = "Server host key changed. Review before accepting."
+                throw ChangedHostKeyException(pendingHostKey!!)
+            }
             if (msg.contains("UnknownHostKey", ignoreCase = true) || msg.contains("reject HostKey", ignoreCase = true)) {
                 val hk = runCatching { s.hostKey }.getOrNull()
                 pendingKey = hk
@@ -140,16 +170,38 @@ class SshConnection(
         }
     }
 
-    /** Appends the accepted key to known_hosts (OpenSSH format). */
+    private fun hostPart(): String =
+        if (profile.port == 22) profile.host else "[${profile.host}]:${profile.port}"
+
+    /** Fingerprint of the currently saved pin for this host, if any. */
+    private fun readSavedFingerprint(): String? = runCatching {
+        val f = knownHostsFile?.takeIf { it.exists() } ?: return null
+        val prefix = hostPart() + " "
+        f.readLines()
+            .firstOrNull { it.startsWith(prefix) }
+            ?.split(" ")
+            ?.getOrNull(2)
+            ?.let { sha256Fingerprint(it) }
+    }.getOrNull()
+
+    /**
+     * Saves the accepted key to known_hosts (OpenSSH format), replacing any
+     * previous pin for this host (changed-key accept must not leave the stale
+     * line behind — JSch would keep rejecting).
+     */
     private fun savePendingKey(): Boolean {
         val hk = pendingKey ?: return false
         val f = knownHostsFile ?: return false
         return runCatching {
-            val hostPart = if (profile.port == 22) profile.host else "[${profile.host}]:${profile.port}"
+            val prefix = hostPart() + " "
             f.parentFile?.mkdirs()
+            val kept = if (f.exists()) {
+                f.readLines().filterNot { it.startsWith(prefix) }
+            } else emptyList()
             // HostKey.key is already base64 in JSch - store verbatim (OpenSSH line format)
-            f.appendText("$hostPart ${hk.type} ${hk.key}\n")
+            f.writeText((kept + "${hostPart()} ${hk.type} ${hk.key}").joinToString("\n") + "\n")
             pendingKey = null
+            pendingHostKeyChanged = false
             true
         }.getOrDefault(false)
     }
@@ -175,6 +227,14 @@ class SshConnection(
 
 class UnknownHostKeyException(message: String) : Exception(message)
 
+/**
+ * The server offers a DIFFERENT key than the saved pin (possible MITM —
+ * accept only when the server was knowingly reinstalled). Handled like
+ * [UnknownHostKeyException] (same accept-and-retry path) but shown with an
+ * explicit warning in the review dialog.
+ */
+class ChangedHostKeyException(message: String) : UnknownHostKeyException(message)
+
 /** `SHA256:<base64-nopad>` fingerprint over the raw key blob (base64), OpenSSH display format. */
 fun sha256Fingerprint(keyB64: String): String {
     val blob = java.util.Base64.getDecoder().decode(keyB64.trim())
@@ -197,8 +257,8 @@ fun SshConnection.friendlyError(e: Exception): String {
             "Timed out — the server may be down or unreachable. Retry in a bit."
         m.contains("has been changed", ignoreCase = true) ->
             "HOST KEY CHANGED — the server's key differs from the saved one. " +
-                "Possible attack: not connecting. If the server was reinstalled, " +
-                "use Settings → Privacy → Forget saved host keys, then reconnect."
+                "Possible attack: review in the popup and accept only if you " +
+                "reinstalled the server on purpose."
         m.contains("ECONNREFUSED", ignoreCase = true) || m.contains("Connection refused", ignoreCase = true) ->
             "Connection refused — is SSH running on ${profile.host}:${profile.port}?"
         m.contains("Auth fail", ignoreCase = true) ->

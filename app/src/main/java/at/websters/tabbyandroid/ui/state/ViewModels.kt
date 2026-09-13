@@ -294,7 +294,10 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun open(profile: SshProfile): String {
-        val knownHosts = java.io.File(getApplication<Application>().filesDir, "known_hosts")
+        val knownHosts = java.io.File(
+            getApplication<Application>().filesDir,
+            at.websters.tabbyandroid.data.ssh.KNOWN_HOSTS_NAME,
+        )
         val tab = Tab(profile = profile, conn = SshConnection(profile, knownHostsFile = knownHosts))
         _tabs.value = _tabs.value + tab
         _active.value = tab.id

@@ -531,10 +531,24 @@ private fun TerminalTabBody(
     }
 
     showHostKey?.let { key ->
+        val changed = tab.conn.pendingHostKeyChanged
         AlertDialog(
             onDismissRequest = { showHostKey = null },
-            title = { Text("Unknown host key") },
-            text = { Text("First connection to ${tab.profile.host}. Verify the fingerprint out-of-band, then accept.\n\n$key") },
+            title = { Text(if (changed) "Server host key changed" else "Unknown host key") },
+            text = {
+                Column {
+                    if (changed) {
+                        Text(
+                            "Warning: this can mean an attack in progress. Accept only if you reinstalled the server or its SSH keys on purpose.",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else {
+                        Text("First connection to ${tab.profile.host}. Verify the fingerprint out-of-band, then accept.")
+                    }
+                    Text(key, style = MaterialTheme.typography.bodyMedium)
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     showHostKey = null
@@ -545,7 +559,7 @@ private fun TerminalTabBody(
                             keyboard?.show()
                         }
                     }
-                }) { Text("Accept & connect") }
+                }) { Text(if (changed) "Accept new key & connect" else "Accept & connect") }
             },
             dismissButton = { TextButton(onClick = { showHostKey = null }) { Text("Cancel") } },
         )

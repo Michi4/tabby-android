@@ -4,10 +4,12 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import at.websters.tabbyandroid.data.ssh.KNOWN_HOSTS_NAME
 
 /**
- * Sync tokens, SSH passwords, key material and host-key pins live here,
- * encrypted with Android Keystore.
+ * Sync tokens, SSH passwords and key material live here, encrypted with
+ * Android Keystore. SSH host-key pins live in the OpenSSH `known_hosts`
+ * file (see [KNOWN_HOSTS_NAME]) which JSch enforces.
  *
  * Fail-closed: if encrypted storage is unavailable there is NO plaintext
  * fallback (a silent downgrade would leak secrets). All accessors throw with
@@ -75,31 +77,15 @@ class SecureTokenStorage(appContext: Context) {
     }
 
     /**
-     * Pinned SSH host keys (`host:port` -> `type:base64-sha256`), JSON in one
-     * encrypted entry. Used to detect changed host keys (MITM) across restarts.
+     * Forgets pinned SSH host keys by deleting the OpenSSH `known_hosts`
+     * file that JSch enforces. Servers will ask to verify again on next
+     * connect (TOFU). This is the only store that matters — an earlier
+     * revision kept a parallel JSON record that nothing enforced.
      */
-    fun getHostKeys(): Map<String, String> {
-        val raw = prefs.getString("hostkeys_json", "").orEmpty()
-        if (raw.isBlank()) return emptyMap()
-        return runCatching {
-            kotlinx.serialization.json.Json.parseToJsonElement(raw)
-                .let { it as kotlinx.serialization.json.JsonObject }
-                .entries.associate { (k, v) -> k to (v as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty() }
-                .filterValues { it.isNotBlank() }
-        }.getOrDefault(emptyMap())
-    }
-
-    fun putHostKey(host: String, port: Int, fingerprint: String) {
-        val all = getHostKeys().toMutableMap()
-        all["$host:$port"] = fingerprint
-        val obj = kotlinx.serialization.json.buildJsonObject {
-            all.forEach { (k, v) -> put(k, kotlinx.serialization.json.JsonPrimitive(v)) }
-        }
-        prefs.edit().putString("hostkeys_json", obj.toString()).apply()
-    }
-
     fun clearHostKeys() {
-        prefs.edit().remove("hostkeys_json").apply()
+        runCatching {
+            java.io.File(app.filesDir, KNOWN_HOSTS_NAME).takeIf { it.exists() }?.delete()
+        }
     }
 
     /** Vault passphrase, only when the user opts into remembering it. */
