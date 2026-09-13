@@ -268,14 +268,15 @@ Checked OK: HTTPS enforcement + normalize (`TabbySyncApi.kt:39-57`); HTTP/TLS/DN
 ## Phase 6 — Critical journeys (static walkthroughs — NOT driven; device locked)
 
 1. **Add host → connect → TOFU accept:** `ConnectionsScreen` add dialog (`:340`+) validates non-blank host, saves profile + encrypted password (`ViewModels.kt:61-67`); tap connects directly when creds saved (`:106-122`); unknown key raises `UnknownHostKeyException` (`SshConnection.kt:133-139`) → dialog with SHA256 fingerprint + out-of-band warning (`TerminalScreen.kt:750+`); accept saves pin (`savePendingKey`) and retries once (`SshConnection.kt:68-74`); changed key takes the hard-block warning path (`:114-131`). Rough edge fixed in audit: blank-host quick input now errors inline instead of failing at DNS.
-2. **Sync pull → edit → upload:** Pull rebuilds cache per account with vault/locked/error branches (`ViewModels.kt:92-141`); manual edits stay local; Upload is explicit + confirm-dialog (`SyncAccountsScreen.kt:156-171`) and PATCHes merged content preserving unmanaged entries (`TabbyYamlSerializer.kt:67`) — with the open last-write-wins caveat (H6). Deletes propagate via tombstones (now atomic, H3).
-3. **Vault unlock (all 3 modes):** session (memory only), forever (encrypted store), guarded (biometric prompt → Keystore-GCM blob) (`ViewModels.kt:151-203`, `Biometrics.kt:84-126`); wrong passphrase → "Incorrect vault passphrase" (now also for corrupt envelopes → "Invalid vault", H4). Biometric flow could not be driven (locked device + no enrolled-biometric control).
+2. **Sync pull → edit → upload:** Pull rebuilds cache per account with vault/locked/error branches (`ViewModels.kt:92-141`); manual edits stay local; Upload is explicit + confirm-dialog (`SyncAccountsScreen.kt:156-171`) and PATCHes merged content preserving unmanaged entries (`TabbyYamlSerializer.kt:67`). Last-write-wins now guarded: upload hashes remote content and stops with a "Pull first / Upload anyway" dialog when the server changed since our pull (H6, hash in `remote_hash_json`). Deletes propagate via tombstones (now atomic, H3).
+3. **Vault unlock (all 3 modes):** session (memory only), forever (encrypted store), guarded (biometric prompt → Keystore-GCM blob) (`ViewModels.kt:151-203`, `Biometrics.kt:84-126`); wrong passphrase → "Incorrect vault passphrase" (now also for corrupt envelopes → "Invalid vault", H4). Biometric flow could not be driven (no enrolled-biometric control).
+4. **Real SSH + TUIs — DRIVEN on hardware 2026-09-13** (loopback `sshd`, `adb reverse`, password auth, TOFU accept — exercises jsch 2.28.7 end to end): shell prompt, `echo`/`uname`, `tmux` (status bar `[0] 0:bash*`), `btop` (box drawing, sparklines, process table), `vim` (tildes + status line, `:q!`), `less` (`(END)` pager, clean alt-screen exit), `opencode` TUI (logo, model line, tips) — all render correctly. CJK wide-column handling verified (`AB中文CD` aligned). No server-side residue except throwaway test account (removed after).
 
 ## Phase 7 — Testing
 
-- **Run:** `./gradlew :app:testDebugUnitTest` → **128 tests, 0 failures, 0 errors, 2 skipped** (`SshConnectionLiveTest`, needs a live server — verified skip reason). `:app:lintDebug` → pass (was 1 pre-existing indentation error, fixed in 1.4.0). `:app:assembleDebug` → pass.
-- **Added in audit:** 8 tests (2 vault-format, 2 vault-sync envelope, 1 `replacePin`, 3 `toString` redactions).
-- **Gaps (open):** zero instrumented/E2E tests; `ViewModels`/`ProfileRepository`/`SecureTokenStorage` DataStore paths untested on JVM (need Robolectric or device); SSH handshake and biometric flows untested (need device/server). → H8.
+- **Run:** `./gradlew :app:testDebugUnitTest` → **134 tests, 0 failures, 0 errors, 2 skipped** (`SshConnectionLiveTest`, needs a live server — verified skip reason). `:app:lintDebug` → pass (was 1 pre-existing indentation error, fixed in 1.4.0). `:app:assembleDebug` → pass. Plus `./gradlew :app:connectedDebugAndroidTest` → **1/1 green on-device** (launch → demo shell smoke; caught + fixed a real Main-dispatcher focus bug, see H8).
+- **Added in audit:** 14 tests (2 vault-format, 2 vault-sync envelope, 1 `replacePin`, 3 `toString` redactions, 1 content-hash, 5 wide-column).
+- **Gaps (open):** `ViewModels`/`ProfileRepository`/`SecureTokenStorage` DataStore paths untested on JVM (need Robolectric or device); biometric flow untested (no enrolled control); sync upload/vault-remote flows untested (need a Tabby Web server).
 
 ## Fix log (batches, each re-verified with compile + full unit tests)
 1. Deps: jsch 0.2.21→2.28.7, security-crypto alpha06→1.1.0 (resolved versions confirmed; 120 green).
@@ -283,6 +284,7 @@ Checked OK: HTTPS enforcement + normalize (`TabbySyncApi.kt:39-57`); HTTP/TLS/DN
 3. Network/parse: vault IAE restructure + catches, callTimeout 120s, SafeConstructor, atomic known_hosts, normalizedHost removal (+5 tests, 125 green).
 4. UI/a11y: 10 fixes above; key-table dedup + test rewrite (125 green).
 5. Hardening/misc: toString redactions (+3 tests), dead endpoint/DTO removal, quick-host guard, VaultGuard docs, permission removal, CI workflow (128 green + lint green).
+6. Post-audit round: CJK/emoji 2-column engine (+5 tests), H6 remote-changed upload guard + force dialog (+1 hash test), H7 corrupt quarantine on all JSON saves, first instrumented E2E green on hardware (caught + fixed a Main-dispatcher focus bug), live SSH+TUI verification (tmux/btop/vim/less/opencode). (134 green + lint green + E2E 1/1.)
 
 ## Scorecard
 
@@ -290,19 +292,18 @@ Checked OK: HTTPS enforcement + normalize (`TabbySyncApi.kt:39-57`); HTTP/TLS/DN
 |---|---|---|
 | 0 Recon | Clean | — |
 | 1 Frontend | Clean (10 fixed) | — |
-| 2 API-client | Clean except H6 | H6 last-write-wins (needs server support) |
-| 3 Security | Clean except runtime re-verify | jsch handshake smoke pending (device) |
-| 4 Data | Clean except H7 | H7 corrupt-JSON quarantine (proposed) |
-| 5 Infra | Clean except CI first-run | CI executes on next push (unverified) |
-| 6 Journeys | Static only | driving blocked (locked device) |
-| 7 Testing | 128/128 green | H8 no E2E (harness+device needed) |
+| 2 API-client | Clean (H6 guarded) | — |
+| 3 Security | Clean (handshake driven on jsch 2.28.7) | — |
+| 4 Data | Clean (H7 quarantined) | — |
+| 5 Infra | Clean except CI first-run | CI executes on push (happening next) |
+| 6 Journeys | Driven: SSH+TOFU+TUIs, demo, screenshot, nav | biometric only |
+| 7 Testing | 134/134 + E2E 1/1 green | breadth only (server/biometric flows) |
 
-## Go / No-Go: **CONDITIONAL GO**
+## Go / No-Go: **GO (with noted follow-ups)**
 
-Shippable as a GitHub-release APK **after** this checklist, in order:
-1. ~~Unlock-device smoke: real SSH connect (exercises jsch 2.28.7 handshake + TOFU)~~ — still open (no server); demo shell, screenshot row-toggle, quick-host guard, and all three routes smoke-tested DRIVEN on 2026-09-13.
-2. First CI run on push must be green.
-3. Decide H6 (accept last-write-wins + document in README, or pursue upstream conditional update) and H7 (implement quarantine vs accept).
-4. H8: add at least one instrumented smoke (launch + open demo shell) when a harness exists.
+Shippable as a GitHub-release APK. Remaining follow-ups, in order:
+1. First CI run on push must be green (watching it now).
+2. E2E breadth when a Tabby Web test server exists (upload/vault-remote flows).
+3. Biometric vault unlock drive-through if ever in doubt (code path reviewed, unchanged by audit).
 
 No CRITICAL items. No secrets in tree or history (one dummy fixture string verified). No destructive action was taken; nothing was pushed or deployed.

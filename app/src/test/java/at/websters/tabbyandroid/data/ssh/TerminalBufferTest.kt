@@ -195,4 +195,37 @@ class TerminalBufferTest {
         b.feed("$ESC[?1000hq".toByteArray())
         assertEquals("q", b.visibleText())
     }
+
+    @Test fun cjkAdvancesTwoColumns() {
+        val b = TerminalBuffer(cols = 20, rows = 3)
+        b.feed("A中B".toByteArray(Charsets.UTF_8))
+        assertEquals(4, b.snapshot().cursorCol)
+        assertTrue(b.visibleText().contains("A中B"))
+    }
+
+    @Test fun cjkOverwriteStaysAligned() {
+        val b = TerminalBuffer(cols = 20, rows = 3)
+        b.feed("12中文34\r--".toByteArray(Charsets.UTF_8))
+        assertTrue(b.visibleText().startsWith("--中文34"))
+    }
+
+    @Test fun emojiPairAdvancesTwoColumns() {
+        val b = TerminalBuffer(cols = 20, rows = 3)
+        b.feed("A😀B".toByteArray(Charsets.UTF_8))
+        assertEquals(4, b.snapshot().cursorCol)
+        assertTrue(b.visibleText().contains("B"))
+    }
+
+    @Test fun cjkWrapsAtMargin() {
+        val b = TerminalBuffer(cols = 3, rows = 4)
+        b.feed("中文中".toByteArray(Charsets.UTF_8))
+        // a wide glyph that doesn't fit wraps whole (like xterm)
+        assertEquals("中\n文\n中", b.visibleText())
+    }
+
+    @Test fun boxDrawingStillOneColumn() {
+        val b = TerminalBuffer(cols = 20, rows = 3)
+        b.feed("─│┌⣀█".toByteArray(Charsets.UTF_8))
+        assertEquals(5, b.snapshot().cursorCol)
+    }
 }

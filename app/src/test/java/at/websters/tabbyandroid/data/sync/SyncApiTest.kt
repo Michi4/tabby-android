@@ -85,4 +85,13 @@ class SyncApiTest {
         assertFalse(body.toString().contains("SECRET-HOST"))
         assertTrue(body.toString().contains("1.2.3"))
     }
+
+    @Test fun contentHashIsStableAndSensitive() {
+        // SHA-256 of "abc" — matches `printf abc | sha256sum`
+        assertEquals(
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            contentHash("abc"),
+        )
+        assertFalse(contentHash("a") == contentHash("b"))
+    }
 }

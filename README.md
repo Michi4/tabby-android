@@ -29,9 +29,11 @@ the same key. Never commit keystores or passwords (both live outside git).
 - **Bidirectional sync**: Pull (`GET`) downloads profiles; Upload (`PATCH /api/1/configs/{id}`,
   same call desktop Tabby makes) pushes them back. **Upload is always an explicit tap
   behind a confirm dialog - there is no auto-upload**, so the phone can never silently
-  clobber your desktop config. Merge is non-destructive: unmanaged server entries,
-  private-key refs, passwords, scripts and forwards are preserved; deletes propagate
-  via tombstones. HTTPS enforced (no cleartext sync).
+  clobber your desktop config. If the server config changed since your last pull,
+  upload stops and asks first ("Pull first" or "Upload anyway"). Merge is
+  non-destructive: unmanaged server entries, private-key refs, passwords, scripts
+  and forwards are preserved; deletes propagate via tombstones. Corrupt local
+  data is quarantined (never silently wiped). HTTPS enforced (no cleartext sync).
 - **Vault-encrypted configs**: fully-encrypted Tabby configs decrypt on-device
   (exact desktop algorithm: PBKDF2-SHA512 ×100000 → AES-256-CBC). The vault
   passphrase is asked on-device, never logged, and unlocks per your choice:
@@ -92,13 +94,16 @@ Never commit real tokens. The app never logs tokens/passwords/keys.
 ./gradlew :app:assembleDebug
 ./gradlew :app:testDebugUnitTest
 ./gradlew :app:lintDebug
+./gradlew :app:connectedDebugAndroidTest  # needs a phone plugged in
 ```
 
-128 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
+134 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
 folder-tree (nesting, orphans, cycles), terminal buffer (incl. alt-screen,
-margins, erase/insert/delete, DSR, split UTF-8) + key bytes + one-shot
-modifier mappings + demo-shell line discipline, SSH key generation, sync API
-(auth header, HTTPS rules, error mapping), quick-connect.
+margins, erase/insert/delete, DSR, split UTF-8, wide columns) + key bytes + one-shot
+modifier mappings + demo-shell line discipline, vault format errors, known_hosts
+replace, secret redaction, content hashing, SSH key generation, sync API
+(auth header, HTTPS rules, error mapping), quick-connect — plus one on-device
+instrumented smoke test (launch → demo shell).
 
 ## Architecture
 

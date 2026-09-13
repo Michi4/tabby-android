@@ -116,4 +116,9 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("androidx.datastore:datastore-preferences:1.1.1")
+
+    // On-device smoke tests (connectedDebugAndroidTest on a real phone)
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }

@@ -49,8 +49,10 @@ class SyncRepository(
                 val full = api.getConfig(configId)
                 val origin = "tabby:${account.id}:$configId"
                 when (val r = VaultSync.resolvePull(full.content, origin, vaultPassphrase)) {
-                    is VaultSync.PullResolution.Ready ->
+                    is VaultSync.PullResolution.Ready -> {
+                        profiles.saveRemoteHash(account.id, contentHash(full.content))
                         SyncResult(true, r.profiles.size, null, r.profiles, r.groups)
+                    }
                     is VaultSync.PullResolution.Locked ->
                         SyncResult(false, 0, "Vault locked — enter the vault passphrase", vaultLocked = true)
                     is VaultSync.PullResolution.Failed ->
@@ -75,13 +77,16 @@ class SyncRepository(
      * Uploads local profiles to the server. Only ever called from an explicit
      * Upload tap - never automatically - so a phone can never silently clobber
      * the desktop config. Unmanaged remote entries are preserved (inside or
-     * outside the vault alike).
+     * outside the vault alike). When the server config changed since our last
+     * pull (e.g. edited on desktop) and [force] is false, no PATCH is sent:
+     * the result carries `remoteChanged = true` so the UI can ask first.
      */
     suspend fun upload(
         account: SyncAccount,
         localProfiles: List<SshProfile>,
         tombstoneIds: Set<String>,
         vaultPassphrase: String? = null,
+        force: Boolean = false,
     ): UploadResult = withContext(Dispatchers.IO) {
         try {
             val token = secrets.getAccountToken(account.id)
@@ -90,6 +95,16 @@ class SyncRepository(
                 ?: return@withContext UploadResult(false, 0, 0, "No remote config selected for '${account.name}'")
             val api = apiFactory(TabbySyncApiFactory.normalizeHost(account.hostUrl), token)
             val remote = api.getConfig(configId)
+            if (!force) {
+                val saved = profiles.currentRemoteHashes()[account.id]
+                if (saved != null && saved != contentHash(remote.content)) {
+                    return@withContext UploadResult(
+                        false, 0, 0,
+                        "Server config changed since your last pull",
+                        remoteChanged = true,
+                    )
+                }
+            }
             val merged = when (val r = VaultSync.buildUpload(remote.content, localProfiles, tombstoneIds, vaultPassphrase)) {
                 is VaultSync.PushResolution.Ready -> r.content
                 is VaultSync.PushResolution.Locked ->
@@ -104,6 +119,7 @@ class SyncRepository(
                     lastUsedWithVersion = "android-${BuildConfig.VERSION_NAME}",
                 ),
             )
+            profiles.saveRemoteHash(account.id, contentHash(merged))
             UploadResult(true, localProfiles.size, tombstoneIds.size, null)
         } catch (e: Exception) {
             UploadResult(false, 0, 0, TabbySyncApiFactory.friendlyError(e))
@@ -116,7 +132,16 @@ class SyncRepository(
         val removed: Int,
         val error: String? = null,
         val vaultLocked: Boolean = false,
+        /** Server changed since our last pull — nothing was uploaded. */
+        val remoteChanged: Boolean = false,
     )
+}
+
+/** SHA-256 hex of remote content (for change detection — never the content itself). */
+internal fun contentHash(content: String): String {
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(content.toByteArray(Charsets.UTF_8))
+    return digest.joinToString("") { "%02x".format(it) }
 }
 
 /** Session + optionally remembered vault passphrases, per sync account. Never logged. */

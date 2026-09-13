@@ -26,6 +26,10 @@
   `Connect`/`Reconnect` row with a `Change` expander instead of a password box;
   key connects allow blank (passphraseless) without friction.
 - Changed-host-key error now points to `Forget saved host keys (Settings → Privacy)`.
+- Upload guards against overwriting desktop edits: if the server config changed
+  since your last pull, upload stops and offers "Pull first" or "Upload anyway".
+- Corrupt local data is quarantined to `<key>.corrupt-bak` before any
+  overwriting save instead of being silently wiped.
 
 ### Terminal emulation (btop / tmux / vim / opencode)
 - Full alternate-screen support (`1047/1048/1049` with cursor save/restore/clear).
@@ -40,6 +44,10 @@
   reverse-video rendering, plus existing 256/truecolor approximation.
 - Split-safe input: incomplete trailing UTF-8 and split escape sequences are
   carried into the next `feed()` instead of corrupting output.
+- Double-width glyphs: CJK/Hangul/fullwidth advance 2 columns (overwrites stay
+  aligned, wraps whole like xterm); emoji pairs advance 2; box drawing,
+  braille and blocks stay 1 column. Verified live against `tmux`, `btop`,
+  `vim`, `less` and the `opencode` TUI.
 - Connection drains terminal replies back to the server; added `setPtySize()`
   for future dynamic resizing.
 
@@ -79,8 +87,12 @@
 
 ### General
 - Version bump `1.3.0 (4)` → `1.4.0 (5)`.
-- Test suite `65` → `120` unit tests (alt-screen, margins, erase/insert/delete,
+- Test suite `65` → `134` unit tests (alt-screen, margins, erase/insert/delete,
   DSR, cursor visibility, split UTF-8, modifier mappings, demo-shell line
-  discipline, unlimited font prefs).
+  discipline, unlimited font prefs, vault format errors, known_hosts replace,
+  secret `toString` redaction, content hashing, wide-char columns).
+- First on-device instrumented smoke test (`connectedDebugAndroidTest`: launch →
+  demo shell). It caught a real bug: focus/keyboard requests after connect now
+  pin to `Main.immediate` instead of assuming the resuming dispatcher.
 - Fixed pre-existing `changedKeyIsHardBlock` expectation to match the shipped
   error text.

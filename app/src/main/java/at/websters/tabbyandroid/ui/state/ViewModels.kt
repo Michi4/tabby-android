@@ -433,6 +433,7 @@ class SyncAccountsViewModel(app: Application) : AndroidViewModel(app) {
             repo.saveVaultSealed(account.id, null)
             repo.clearVaultLockMode(account.id)
             repo.clearAllTombstones(account.id)
+            repo.clearRemoteHash(account.id)
             repo.purgeProfileRefs(removedIds)
             at.websters.tabbyandroid.data.sync.VaultPassphrases.clear(account.id)
             at.websters.tabbyandroid.data.sync.VaultLocks.clear(account.id)
@@ -474,7 +475,13 @@ class SyncAccountsViewModel(app: Application) : AndroidViewModel(app) {
      * auto-upload anywhere in the app. Uploads this account's synced profiles
      * plus on-device profiles; unmanaged server entries are preserved.
      */
-    fun upload(account: SyncAccount) {
+    private val _forceUpload = MutableStateFlow<SyncAccount?>(null)
+    /** Account whose server config changed since our pull — ask before overwriting. */
+    val forceUpload: StateFlow<SyncAccount?> = _forceUpload
+
+    fun dismissForceUpload() { _forceUpload.value = null }
+
+    fun upload(account: SyncAccount, force: Boolean = false) {
         viewModelScope.launch {
             _busy.value = true
             _msg.value = null
@@ -490,13 +497,16 @@ class SyncAccountsViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 val vaultPw = VaultPassphrases.peek(account.id)
                     ?: secrets.getVaultPassphrase(account.id).takeIf { it.isNotBlank() }
-                val r = sync.upload(account, payload, stones, vaultPw)
+                val r = sync.upload(account, payload, stones, vaultPw, force)
                 if (r.ok) {
                     repo.clearTombstones(account.id, payload.map { it.id }.toSet() + stones)
                     saveAccountInternal(account.copy(lastSyncAtEpochMs = System.currentTimeMillis(), lastError = null))
                     _msg.value = "Uploaded ${r.uploaded} profiles" +
                         (if (r.removed > 0) " (removed ${r.removed})" else "") +
                         " to '${account.selectedConfigName ?: account.name}'"
+                } else if (r.remoteChanged && !force) {
+                    // Nothing uploaded: let the user decide after seeing the warning.
+                    _forceUpload.value = account
                 } else {
                     if (r.vaultLocked) VaultLocks.set(account.id)
                     saveAccountInternal(account.copy(lastError = r.error))

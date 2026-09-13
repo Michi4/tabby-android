@@ -69,6 +69,7 @@ fun SyncSection(
     val accounts by vm.accounts.collectAsState()
     val busy by vm.busy.collectAsState()
     val msg by vm.message.collectAsState()
+    val forceAcc by vm.forceUpload.collectAsState()
     val vaultLocked by at.websters.tabbyandroid.data.sync.VaultLocks.locked.collectAsState()
     val snack = remember { SnackbarHostState() }
     var editing by remember { mutableStateOf<SyncAccount?>(null) }
@@ -170,6 +171,37 @@ fun SyncSection(
                 TextButton(onClick = { vm.upload(acc); confirmUpload = null }) { Text("Upload") }
             },
             dismissButton = { TextButton(onClick = { confirmUpload = null }) { Text("Cancel") } },
+        )
+    }
+
+    forceAcc?.let { acc ->
+        AlertDialog(
+            onDismissRequest = { vm.dismissForceUpload() },
+            title = { Text("Server changed — overwrite?") },
+            text = {
+                Text(
+                    "The config on ${acc.hostUrl} changed since your last pull " +
+                        "(e.g. edited on desktop). Uploading now overwrites those " +
+                        "server-side changes with this device's profiles.\n\n" +
+                        "Pull first to merge, or upload anyway.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.upload(acc, force = true)
+                    vm.dismissForceUpload()
+                }) { Text("Upload anyway") }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = {
+                        connections.syncAll()
+                        vm.dismissForceUpload()
+                    }) { Text("Pull first") }
+                    TextButton(onClick = { vm.dismissForceUpload() }) { Text("Cancel") }
+                }
+            },
         )
     }
 

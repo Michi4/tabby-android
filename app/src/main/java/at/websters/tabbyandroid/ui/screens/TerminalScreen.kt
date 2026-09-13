@@ -457,9 +457,13 @@ private fun TerminalTabBody(
             if (r.isFailure && r.exceptionOrNull() is at.websters.tabbyandroid.data.ssh.UnknownHostKeyException) {
                 showHostKey = tab.conn.pendingHostKey
             } else if (r.isSuccess) {
-                // ready to type: focus the sender, pop the keyboard
-                focusRequester.requestFocus()
-                keyboard?.show()
+                // ready to type: focus the sender, pop the keyboard.
+                // Pinned to Main: focus/keyboard are UI ops and the resuming
+                // context is not guaranteed Main (e.g. under UI-test dispatchers).
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                    focusRequester.requestFocus()
+                    keyboard?.show()
+                }
             }
         }
     }
@@ -799,8 +803,10 @@ private fun TerminalTabBody(
                             acceptHostKey = true,
                         )
                         if (r.isSuccess) {
-                            focusRequester.requestFocus()
-                            keyboard?.show()
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+                                focusRequester.requestFocus()
+                                keyboard?.show()
+                            }
                         }
                     }
                 }) { Text(if (changed) "Accept new key & connect" else "Accept & connect") }

@@ -3,6 +3,26 @@ package at.websters.tabbyandroid.data.ssh
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
+/** BMP ranges with East Asian Wide / Fullwidth display width (2 columns). */
+private val WIDE_RANGES = listOf(
+    0x1100 to 0x115F, // Hangul Jamo
+    0x2E80 to 0x303E, // CJK radicals, Kangxi, ideographic description, CJK symbols
+    0x3041 to 0x33FF, // Hiragana, Katakana, Bopomofo, Hangul compat, enclosed CJK
+    0x3400 to 0x4DBF, // CJK Extension A
+    0x4E00 to 0x9FFF, // CJK Unified Ideographs
+    0xA000 to 0xA4CF, // Yi
+    0xAC00 to 0xD7A3, // Hangul Syllables
+    0xF900 to 0xFAFF, // CJK Compatibility Ideographs
+    0xFE10 to 0xFE19, // Vertical forms
+    0xFE30 to 0xFE4F, // CJK Compatibility Forms
+    0xFF00 to 0xFF60, // Fullwidth ASCII variants
+    0xFFE0 to 0xFFE6, // Fullwidth symbols
+)
+
+private val WIDE: BooleanArray by lazy {
+    BooleanArray(0x10000) { c -> WIDE_RANGES.any { (s, e) -> c in s..e } }
+}
+
 /**
  * VT100/xterm screen model (MIT, dependency-free).
  *
@@ -26,6 +46,8 @@ class TerminalBuffer(val cols: Int = 80, val rows: Int = 24, val maxScrollback: 
         val reverse: Boolean = false,
         val underline: Boolean = false,
         val dim: Boolean = false,
+        /** Second half of a double-width glyph (skipped in text dumps). */
+        val wide2nd: Boolean = false,
     )
     data class Snapshot(
         val lines: List<List<Cell>>,
@@ -177,10 +199,7 @@ class TerminalBuffer(val cols: Int = 80, val rows: Int = 24, val maxScrollback: 
                     if (text.isEmpty() || text[0] == '\uFFFD' && need > 1 && !isValidUtf8(incoming, i, need)) {
                         putChar('?')
                     } else {
-                        for (ch in text) {
-                            if (ch == '\u0000') continue
-                            putChar(ch)
-                        }
+                        putText(text)
                     }
                     i += need
                 }
@@ -231,16 +250,63 @@ class TerminalBuffer(val cols: Int = 80, val rows: Int = 24, val maxScrollback: 
     }
 
     private fun putChar(ch: Char) {
+        if (ch == '\u0000') return
+        putCells(ch.toString(), width = 1)
+    }
+
+    /** Writes one Unicode code point (1–2 UTF-16 units) with correct column width. */
+    private fun putText(s: String) {
+        var k = 0
+        while (k < s.length) {
+            val cp = s.codePointAt(k)
+            val units = Character.charCount(cp)
+            if (cp == 0) {
+                k += units
+                continue
+            }
+            val w = if (cp > 0xFFFF) 2 else bmpWidth(cp)
+            putCells(s.substring(k, k + units), w)
+            k += units
+        }
+    }
+
+    private fun putCells(units: String, width: Int) {
+        val w = width.coerceIn(1, 2)
+        if (cursorCol + w > cols) {
+            if (wrapAround) lineFeed() else cursorCol = (cols - w).coerceAtLeast(0)
+        }
         if (cursorCol >= cols) {
-            if (wrapAround) lineFeed() else cursorCol = cols - 1
+            if (wrapAround) lineFeed() else cursorCol = (cols - w).coerceAtLeast(0)
         }
         ensureRow(cursorRow)
         val phys = physRow(cursorRow)
         if (phys in active().indices && cursorCol in 0 until cols) {
-            active()[phys][cursorCol] = Cell(ch, curFg, curBold, curBg, curReverse, curUnderline, curDim)
+            val row = active()[phys]
+            row[cursorCol] = Cell(
+                units[0], curFg, curBold, curBg, curReverse, curUnderline, curDim
+            )
+            // wide glyphs occupy two cells: the second holds the low surrogate
+            // (supplementary plane) or a blank filler (CJK). Either way the
+            // concatenated line text stays correct and overwrites stay aligned.
+            if (w == 2 && cursorCol + 1 < cols) {
+                val second = if (units.length > 1) units[1] else ' '
+                row[cursorCol + 1] = Cell(
+                    second, curFg, curBold, curBg, curReverse, curUnderline, curDim,
+                    wide2nd = true,
+                )
+            }
         }
-        cursorCol++
+        cursorCol += w
     }
+
+    /**
+     * Display width of a BMP code point: 2 for East Asian Wide/Fullwidth
+     * (CJK, Hangul, fullwidth forms). Ambiguous-width symbols (box drawing,
+     * braille, blocks, misc symbols like U+231A) are 1 — matching terminal
+     * fonts in non-CJK locales, so btop/htop graphics stay aligned.
+     * Combining marks are treated as 1 (safe fallback, documented).
+     */
+    private fun bmpWidth(c: Int): Int = if (c in 0..0xFFFF && WIDE[c]) 2 else 1
 
     private fun lineFeed() = newLine()
 
@@ -624,7 +690,9 @@ class TerminalBuffer(val cols: Int = 80, val rows: Int = 24, val maxScrollback: 
     fun visibleText(): String {
         val base = viewportBase()
         return (0 until rows).joinToString("\n") { r ->
-            active().getOrNull(base + r)?.joinToString("") { it.ch.toString() }?.trimEnd().orEmpty()
+            active().getOrNull(base + r)
+                ?.filter { !it.wide2nd }
+                ?.joinToString("") { it.ch.toString() }?.trimEnd().orEmpty()
         }.trimEnd()
     }
 }

@@ -2,6 +2,7 @@ package at.websters.tabbyandroid.data.local
 
 import android.content.Context
 import androidx.datastore.preferences.core.MutablePreferences
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -72,6 +73,7 @@ class ProfileRepository(private val appContext: Context) {
         private val KEY_VAULT_LOCK = stringPreferencesKey("vault_lock_json")
         private val KEY_VAULT_SEALED = stringPreferencesKey("vault_sealed_json")
         private val KEY_OPEN_TABS = stringPreferencesKey("open_tabs_json")
+        private val KEY_REMOTE_HASH = stringPreferencesKey("remote_hash_json")
         /** Where to get a sync service (self-hosted Tabby Web), shown as a Learn-more link. */
         const val SYNC_DOCS_URL = "https://github.com/Eugeny/tabby-web"
         /** Vault lock modes: ask every time (default), remember, or biometric/PIN-guarded. */
@@ -146,12 +148,18 @@ class ProfileRepository(private val appContext: Context) {
 
     suspend fun saveAccounts(accounts: List<SyncAccount>) {
         appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_ACCOUNTS) { raw ->
+                json.decodeFromString(ListSerializer(SyncAccount.serializer()), raw)
+            }
             it[KEY_ACCOUNTS] = json.encodeToString(ListSerializer(SyncAccount.serializer()), accounts)
         }
     }
 
     suspend fun saveCached(profiles: List<SshProfile>) {
         appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_CACHED) { raw ->
+                json.decodeFromString(ListSerializer(SshProfile.serializer()), raw)
+            }
             it[KEY_CACHED] = json.encodeToString(ListSerializer(SshProfile.serializer()), profiles)
         }
     }
@@ -164,6 +172,12 @@ class ProfileRepository(private val appContext: Context) {
      */
     suspend fun deleteCachedProfile(profileId: String, accountId: String?) {
         appContext.tabbyStore.edit { prefs ->
+            prefs.quarantineIfCorrupt(KEY_CACHED) { raw ->
+                json.decodeFromString(ListSerializer(SshProfile.serializer()), raw)
+            }
+            prefs.quarantineIfCorrupt(KEY_TOMBSTONES) { raw ->
+                json.decodeFromString(MapSerializer(String.serializer(), ListSerializer(String.serializer())), raw)
+            }
             val cached = prefs[KEY_CACHED]?.let { raw ->
                 runCatching { json.decodeFromString(ListSerializer(SshProfile.serializer()), raw) }.getOrDefault(emptyList())
             } ?: emptyList()
@@ -196,7 +210,30 @@ class ProfileRepository(private val appContext: Context) {
         appContext.tabbyStore.edit { prefs -> prefs.purgeProfileRefs(profileIds) }
     }
 
+    /**
+     * If [key] holds a value that no longer decodes, stash the raw blob under
+     * "<key>.corrupt-bak" before the caller overwrites it. Reads elsewhere
+     * fail open to empty (never crash), so without this a corrupt blob plus
+     * any later save would silently vaporize user data. [parse] only attempts
+     * a decode — the result is discarded.
+     */
+    private fun MutablePreferences.quarantineIfCorrupt(
+        key: Preferences.Key<String>,
+        parse: (String) -> Any?,
+    ) {
+        val raw = this[key] ?: return
+        if (runCatching { parse(raw) }.isFailure) {
+            this[stringPreferencesKey(key.name + ".corrupt-bak")] = raw
+        }
+    }
+
     private fun MutablePreferences.purgeProfileRefs(profileIds: Set<String>) {
+        quarantineIfCorrupt(KEY_PINS) { raw ->
+            json.decodeFromString(ListSerializer(Pin.serializer()), raw)
+        }
+        quarantineIfCorrupt(KEY_OPEN_TABS) { raw ->
+            json.decodeFromString(ListSerializer(SshProfile.serializer()), raw)
+        }
         val pins = this[KEY_PINS]?.let { raw ->
             runCatching {
                 json.decodeFromString(ListSerializer(Pin.serializer()), raw)
@@ -217,6 +254,9 @@ class ProfileRepository(private val appContext: Context) {
 
     suspend fun saveManual(profiles: List<SshProfile>) {
         appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_MANUAL) { raw ->
+                json.decodeFromString(ListSerializer(SshProfile.serializer()), raw)
+            }
             it[KEY_MANUAL] = json.encodeToString(ListSerializer(SshProfile.serializer()), profiles)
         }
     }
@@ -235,6 +275,11 @@ class ProfileRepository(private val appContext: Context) {
 
     suspend fun saveSshKeys(keys: List<at.websters.tabbyandroid.data.model.SshKeyMeta>) {
         appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_SSH_KEYS) { raw ->
+                json.decodeFromString(
+                    ListSerializer(at.websters.tabbyandroid.data.model.SshKeyMeta.serializer()), raw
+                )
+            }
             it[KEY_SSH_KEYS] = json.encodeToString(
                 ListSerializer(at.websters.tabbyandroid.data.model.SshKeyMeta.serializer()), keys
             )
@@ -255,6 +300,11 @@ class ProfileRepository(private val appContext: Context) {
 
     suspend fun savePins(pins: List<at.websters.tabbyandroid.data.model.Pin>) {
         appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_PINS) { raw ->
+                json.decodeFromString(
+                    ListSerializer(at.websters.tabbyandroid.data.model.Pin.serializer()), raw
+                )
+            }
             it[KEY_PINS] = json.encodeToString(
                 ListSerializer(at.websters.tabbyandroid.data.model.Pin.serializer()), pins
             )
@@ -291,6 +341,11 @@ class ProfileRepository(private val appContext: Context) {
 
     suspend fun saveGroups(groups: List<at.websters.tabbyandroid.data.model.TabbyGroup>) {
         appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_GROUPS) { raw ->
+                json.decodeFromString(
+                    ListSerializer(at.websters.tabbyandroid.data.model.TabbyGroup.serializer()), raw
+                )
+            }
             it[KEY_GROUPS] = json.encodeToString(
                 ListSerializer(at.websters.tabbyandroid.data.model.TabbyGroup.serializer()), groups
             )
@@ -314,6 +369,9 @@ class ProfileRepository(private val appContext: Context) {
         val all = vaultLockModes.first().toMutableMap()
         all[accountId] = mode
         appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_VAULT_LOCK) { raw ->
+                json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), raw)
+            }
             it[KEY_VAULT_LOCK] = json.encodeToString(MapSerializer(String.serializer(), String.serializer()), all)
         }
     }
@@ -343,6 +401,9 @@ class ProfileRepository(private val appContext: Context) {
         val all = vaultSealed.first().toMutableMap()
         if (blob.isNullOrBlank()) all.remove(accountId) else all[accountId] = blob
         appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_VAULT_SEALED) { raw ->
+                json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), raw)
+            }
             it[KEY_VAULT_SEALED] = json.encodeToString(MapSerializer(String.serializer(), String.serializer()), all)
         }
     }
@@ -366,6 +427,9 @@ class ProfileRepository(private val appContext: Context) {
 
     private suspend fun saveTombstones(all: Map<String, List<String>>) {
         appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_TOMBSTONES) { raw ->
+                json.decodeFromString(MapSerializer(String.serializer(), ListSerializer(String.serializer())), raw)
+            }
             it[KEY_TOMBSTONES] = json.encodeToString(
                 MapSerializer(String.serializer(), ListSerializer(String.serializer())), all
             )
@@ -403,6 +467,42 @@ class ProfileRepository(private val appContext: Context) {
     suspend fun currentAccounts(): List<SyncAccount> = accounts.first()
 
     /**
+     * SHA-256 of the last remote config content seen per account (pull or
+     * upload). Lets upload detect "server changed since your last pull"
+     * instead of blindly last-write-winning over desktop edits. Hashes only,
+     * never content.
+     */
+    val remoteHashes: Flow<Map<String, String>> = appContext.tabbyStore.data.map {
+        it[KEY_REMOTE_HASH]?.let { raw ->
+            runCatching {
+                json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), raw)
+            }.getOrDefault(emptyMap())
+        } ?: emptyMap()
+    }
+
+    suspend fun currentRemoteHashes(): Map<String, String> = remoteHashes.first()
+
+    suspend fun saveRemoteHash(accountId: String, hash: String) {
+        val all = currentRemoteHashes().toMutableMap()
+        all[accountId] = hash
+        appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_REMOTE_HASH) { raw ->
+                json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), raw)
+            }
+            it[KEY_REMOTE_HASH] = json.encodeToString(MapSerializer(String.serializer(), String.serializer()), all)
+        }
+    }
+
+    suspend fun clearRemoteHash(accountId: String) {
+        val all = currentRemoteHashes().toMutableMap()
+        if (all.remove(accountId) != null) {
+            appContext.tabbyStore.edit {
+                it[KEY_REMOTE_HASH] = json.encodeToString(MapSerializer(String.serializer(), String.serializer()), all)
+            }
+        }
+    }
+
+    /**
      * Open terminal tabs (profiles only, never secrets) so returning to the
      * app restores the tab strip — even after process death. Connections
      * themselves restart as disconnected tabs with one-tap reconnect (creds
@@ -416,6 +516,9 @@ class ProfileRepository(private val appContext: Context) {
 
     suspend fun saveOpenTabs(profiles: List<SshProfile>) {
         appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_OPEN_TABS) { raw ->
+                json.decodeFromString(ListSerializer(SshProfile.serializer()), raw)
+            }
             it[KEY_OPEN_TABS] = json.encodeToString(ListSerializer(SshProfile.serializer()), profiles.take(20))
         }
     }
