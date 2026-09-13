@@ -225,7 +225,7 @@ class SshConnection(
     }
 }
 
-class UnknownHostKeyException(message: String) : Exception(message)
+open class UnknownHostKeyException(message: String) : Exception(message)
 
 /**
  * The server offers a DIFFERENT key than the saved pin (possible MITM —
