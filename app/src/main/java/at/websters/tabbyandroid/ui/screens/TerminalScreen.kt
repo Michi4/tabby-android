@@ -529,7 +529,11 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
                 TextButton(onClick = {
                     showHostKey = null
                     scope.launch {
-                        tab.conn.connect(password, keyMat?.first, keyMat?.second, acceptHostKey = true)
+                        val r = tab.conn.connect(password, keyMat?.first, keyMat?.second, acceptHostKey = true)
+                        if (r.isSuccess) {
+                            focusRequester.requestFocus()
+                            keyboard?.show()
+                        }
                     }
                 }) { Text("Accept & connect") }
             },
