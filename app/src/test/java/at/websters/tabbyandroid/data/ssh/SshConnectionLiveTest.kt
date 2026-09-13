@@ -70,4 +70,45 @@ class SshConnectionLiveTest {
             knownHosts.delete()
         }
     }
+
+    /**
+     * KEY-auth variant: device-style RSA key (no passphrase), empty password.
+     * Proves addIdentity path + stdin pipe execute a command (marker file).
+     * Needs TABBY_TEST_SSH_KEY (private PEM path, authorized on the rig).
+     */
+    @Test fun keySessionExecMarker(): Unit = runBlocking {
+        val cfg = env()
+        Assume.assumeTrue("no live SSH rig (set TABBY_TEST_SSH_* env)", cfg != null)
+        cfg!!
+        val keyPath = System.getenv("TABBY_TEST_SSH_KEY")
+        Assume.assumeTrue("no test key (set TABBY_TEST_SSH_KEY)", !keyPath.isNullOrBlank())
+        val profile = SshProfile(
+            id = "livekey", name = "livekey", host = cfg["host"]!!,
+            port = cfg["port"]!!.toInt(), username = cfg["user"]!!,
+        )
+        val knownHosts = kotlin.io.path.createTempFile("known_hosts").toFile()
+        try {
+            knownHosts.writeText("")
+            val conn = SshConnection(profile, knownHostsFile = knownHosts)
+            try {
+                val pem = java.io.File(keyPath!!).readText()
+                val r = conn.connect("", privateKeyPem = pem, privateKeyPassphrase = "", acceptHostKey = true)
+                assertTrue("key connect failed: ${r.exceptionOrNull()}", r.isSuccess)
+                assertEquals(SshState.CONNECTED, conn.state.value)
+                val marker = "/tmp/jvmkey-ok"
+                java.io.File(marker).delete()
+                conn.send("touch $marker\r")
+                withTimeout(15_000) {
+                    while (!java.io.File(marker).exists()) {
+                        delay(200)
+                    }
+                }
+                println("KEY-EXECUTES: key-auth session ran remote command")
+            } finally {
+                conn.close()
+            }
+        } finally {
+            knownHosts.delete()
+        }
+    }
 }

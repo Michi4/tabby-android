@@ -48,17 +48,6 @@ class SshConnection(
     private var readerJob: Job? = null
     /** Our end of the stdin pipe (canonical JSch shell input pattern). */
     private var shellInput: java.io.PipedOutputStream? = null
-    private var shellPipeIn: java.io.PipedInputStream? = null
-
-    /** DIAG-TEMP: pipe backlog (removed before release). */
-    fun debugPipe(): String {
-        val avail = try {
-            shellPipeIn?.available() ?: -1
-        } catch (_: Exception) {
-            -2
-        }
-        return "pipeIn=${shellPipeIn != null} avail=$avail"
-    }
 
     suspend fun connect(
         password: String,
@@ -128,7 +117,6 @@ class SshConnection(
         // is unreliable across JSch versions for interactive shells)
         val pipeIn = java.io.PipedInputStream(64 * 1024)
         shellInput = java.io.PipedOutputStream(pipeIn)
-        shellPipeIn = pipeIn
         ch.setInputStream(pipeIn)
         ch.connect(10_000)
         session = s
