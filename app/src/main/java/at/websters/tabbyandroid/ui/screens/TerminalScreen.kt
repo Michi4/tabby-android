@@ -1,7 +1,6 @@
 package at.websters.tabbyandroid.ui.screens
 
 import android.widget.Toast
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -14,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -270,7 +270,8 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
     var pwVisible by remember { mutableStateOf(false) }
     var ctrl by remember(tab.id) { mutableStateOf(false) }
     var alt by remember(tab.id) { mutableStateOf(false) }
-    var keysOpen by remember(tab.id) { mutableStateOf(true) }
+    // extended-key rows on screen: 3 -> 2 -> 1 -> hidden, cycles on toggle
+    var keyRows by remember(tab.id) { mutableIntStateOf(3) }
     var password by remember(tab.id) { mutableStateOf(SessionPasswords.take(tab.profile.id)) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -320,11 +321,11 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
                 .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = { keysOpen = !keysOpen }) {
+        IconButton(onClick = { keyRows = if (keyRows <= 0) 3 else keyRows - 1 }) {
                 Icon(
-                    if (keysOpen) Icons.Filled.KeyboardHide else Icons.Filled.Keyboard,
-                    "More keys",
-                    tint = if (keysOpen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    if (keyRows == 0) Icons.Filled.Keyboard else Icons.Filled.KeyboardHide,
+                    "Key rows: $keyRows of 3 (tap to cycle)",
+                    tint = if (keyRows == 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
                 )
             }
             IconButton(onClick = { fontSize = (fontSize - 1).coerceAtLeast(10) }) {
@@ -502,13 +503,20 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
             }
         }
 
-        // ---- extended keyboard: symbols + arrows always visible, F-keys expand.
+        // ---- extended keys: ride above the keyboard via IME insets, visible
+        // at all times. 1 row keeps symbols (Enter must stay reachable).
         // combos live in the CTRL/ALT toggles + keyboard (no redundant rows).
         // the Enter key submits (sends CR + clears the sender like a real Return)
-        KeyRow(SYMBOL_KEYS) { seq -> if (seq == "\r") submitReturn() else tab.conn.send(seq) }
-        KeyRow(NAV_KEYS) { tab.conn.send(it) }
-        AnimatedVisibility(visible = keysOpen) {
-            KeyRow(FN_KEYS) { tab.conn.send(it) }
+        Column(Modifier.fillMaxWidth().imePadding()) {
+            if (keyRows >= 1) {
+                KeyRow(SYMBOL_KEYS) { seq -> if (seq == "\r") submitReturn() else tab.conn.send(seq) }
+            }
+            if (keyRows >= 2) {
+                KeyRow(NAV_KEYS) { tab.conn.send(it) }
+            }
+            if (keyRows >= 3) {
+                KeyRow(FN_KEYS) { tab.conn.send(it) }
+            }
         }
     }
 
