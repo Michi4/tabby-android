@@ -8,12 +8,17 @@ class UiPrefsTest {
         assertEquals(13, UiPrefs().fontSize)
         assertEquals(true, UiPrefs().follow)
         assertEquals(3, UiPrefs().keyRows)
+        assertEquals(false, UiPrefs().fullscreen)
     }
 
     @Test fun fontClamped() {
-        assertEquals(10, sanitizeFontSize(1))
-        assertEquals(20, sanitizeFontSize(99))
+        // practically unlimited: only anti-crash bounds remain
+        assertEquals(1, sanitizeFontSize(0))
+        assertEquals(1, sanitizeFontSize(-50))
+        assertEquals(256, sanitizeFontSize(999))
         assertEquals(15, sanitizeFontSize(15))
+        assertEquals(48, sanitizeFontSize(48))
+        assertEquals(200, sanitizeFontSize(200))
     }
 
     @Test fun rowsClamped() {

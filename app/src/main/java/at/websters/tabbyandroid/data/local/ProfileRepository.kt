@@ -23,6 +23,13 @@ object UiPrefsDefaults {
     const val FONT_SIZE = 13
     const val FOLLOW = true
     const val KEY_ROWS = 3
+    const val FULLSCREEN = false
+    /**
+     * Practically unlimited (min 1 only guards against invalid zero/negative
+     * sizes that crash text layout; 256sp already fills the screen).
+     */
+    const val FONT_MIN = 1
+    const val FONT_MAX = 256
 }
 
 /** Snapshot of terminal defaults. */
@@ -30,10 +37,11 @@ data class UiPrefs(
     val fontSize: Int = UiPrefsDefaults.FONT_SIZE,
     val follow: Boolean = UiPrefsDefaults.FOLLOW,
     val keyRows: Int = UiPrefsDefaults.KEY_ROWS,
+    val fullscreen: Boolean = UiPrefsDefaults.FULLSCREEN,
 )
 
 /** Clampers (pure, unit-tested): prefs storage can hold anything. */
-fun sanitizeFontSize(sizeSp: Int): Int = sizeSp.coerceIn(10, 20)
+fun sanitizeFontSize(sizeSp: Int): Int = sizeSp.coerceIn(UiPrefsDefaults.FONT_MIN, UiPrefsDefaults.FONT_MAX)
 
 fun sanitizeKeyRows(rows: Int): Int = rows.coerceIn(0, 3)
 
@@ -58,8 +66,10 @@ class ProfileRepository(private val appContext: Context) {
         private val KEY_UI_FONT = intPreferencesKey("ui_font_size")
         private val KEY_UI_FOLLOW = booleanPreferencesKey("ui_follow")
         private val KEY_UI_ROWS = intPreferencesKey("ui_key_rows")
+        private val KEY_UI_FULLSCREEN = booleanPreferencesKey("ui_fullscreen")
         private val KEY_VAULT_LOCK = stringPreferencesKey("vault_lock_json")
         private val KEY_VAULT_SEALED = stringPreferencesKey("vault_sealed_json")
+        private val KEY_OPEN_TABS = stringPreferencesKey("open_tabs_json")
         /** Where to get a sync service (self-hosted Tabby Web), shown as a Learn-more link. */
         const val SYNC_DOCS_URL = "https://github.com/Eugeny/tabby-web"
         /** Vault lock modes: ask every time (default), remember, or biometric/PIN-guarded. */
@@ -94,6 +104,10 @@ class ProfileRepository(private val appContext: Context) {
         sanitizeKeyRows(it[KEY_UI_ROWS] ?: UiPrefsDefaults.KEY_ROWS)
     }
 
+    val uiFullscreen: Flow<Boolean> = appContext.tabbyStore.data.map {
+        it[KEY_UI_FULLSCREEN] ?: UiPrefsDefaults.FULLSCREEN
+    }
+
     suspend fun setUiFontSize(sizeSp: Int) {
         appContext.tabbyStore.edit { it[KEY_UI_FONT] = sanitizeFontSize(sizeSp) }
     }
@@ -104,6 +118,10 @@ class ProfileRepository(private val appContext: Context) {
 
     suspend fun setUiKeyRows(rows: Int) {
         appContext.tabbyStore.edit { it[KEY_UI_ROWS] = sanitizeKeyRows(rows) }
+    }
+
+    suspend fun setUiFullscreen(fullscreen: Boolean) {
+        appContext.tabbyStore.edit { it[KEY_UI_FULLSCREEN] = fullscreen }
     }
 
     val accounts: Flow<List<SyncAccount>> = appContext.tabbyStore.data.map {
@@ -306,4 +324,22 @@ class ProfileRepository(private val appContext: Context) {
     }
 
     suspend fun currentAccounts(): List<SyncAccount> = accounts.first()
+
+    /**
+     * Open terminal tabs (profiles only, never secrets) so returning to the
+     * app restores the tab strip — even after process death. Connections
+     * themselves restart as disconnected tabs with one-tap reconnect (creds
+     * come from encrypted storage, never from here).
+     */
+    val openTabs: Flow<List<SshProfile>> = appContext.tabbyStore.data.map {
+        it[KEY_OPEN_TABS]?.let { raw ->
+            runCatching { json.decodeFromString(ListSerializer(SshProfile.serializer()), raw) }.getOrDefault(emptyList())
+        } ?: emptyList()
+    }
+
+    suspend fun saveOpenTabs(profiles: List<SshProfile>) {
+        appContext.tabbyStore.edit {
+            it[KEY_OPEN_TABS] = json.encodeToString(ListSerializer(SshProfile.serializer()), profiles.take(20))
+        }
+    }
 }

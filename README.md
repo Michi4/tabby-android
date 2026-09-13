@@ -41,11 +41,21 @@ the same key. Never commit keystores or passwords (both live outside git).
 - **Hosts (Termius-like)**: bottom search, quick-connect `user@host:port`,
   nestable folders (incl. Termius `parentGroupId` imports), collapsible sections,
   pin hosts/folders to the top with manual ordering, manual add/edit/delete.
+  Tap ▶ (or the card) connects instantly when auth is saved; long-press edits,
+  pins or deletes. Open tabs survive backgrounding and process death as
+  one-tap reconnect tabs (creds reload from encrypted storage).
 - **Terminal**: browser-style compact tabs, tap-to-type straight into SSH
-  (system keyboard, no send button), sticky CTRL/ALT toggles, collapsible
-  extended keys (symbols, arrows/Home/End/PgUp/PgDn/Ins/Del, F1–F12),
-  VT100/ANSI colors, cursor, follow-output, font size, copy line/screen, paste,
-  clear, TOFU host-key accept dialog.
+  (system keyboard, no send button), top key row `Esc Tab Ctrl ← ↑ ↓ → Alt AltGr`
+  with one-shot modifiers (tap = next key only, double-tap = lock, e.g. tap
+  Ctrl then `b`), row 2 `Enter` + editing + symbols, row 3 `F1–F12`,
+  full xterm emulation (alternate screen, scroll margins, insert/delete
+  lines/chars, erase variants, cursor save/restore/show-hide, DSR replies,
+  reverse/underline/dim, split-sequence-safe UTF-8) for `btop`/`tmux`/`vim`/
+  `opencode` and friends, fullscreen mode (screen only; keyboard + key rows
+  appear on tap), VT100/ANSI colors, cursor, follow-output, font size 1–256sp,
+  swipe-animated tabs, copy line/screen, paste, clear, TOFU host-key accept dialog.
+- **Demo shell**: try the terminal with no server — `Terminal → + → Try the demo shell`
+  runs an on-device shell for basic commands (full-screen TUIs need real SSH).
 - **SSH keys**: import PEM or generate RSA-3072 in-app (public key shown for
   one-time server setup), per-profile key assignment. Keys never leave the device.
 - **Secrets best practice**: sync tokens, passwords and key bytes in
@@ -69,7 +79,10 @@ All screenshots use generic demo data (nothing real).
    **Test & list configs** → pick config → **Save** → **Pull**.
    To send phone-side changes back, use **Upload** on the account card (confirm dialog first).
 3. Open **Hosts** → tap a host → enter password (or pick a key) → **Connect**.
-   Tap the terminal to type; CTRL/ALT stick for combos.
+   Next time just tap ▶ (password/key saved encrypted — no prompt; long-press
+   to edit). Tap the terminal to type; Ctrl/Alt/AltGr in the top key row are
+   one-shot (tap Ctrl, then `b`). Toggle fullscreen in the toolbar or
+   Settings → Terminal.
 
 Never commit real tokens. The app never logs tokens/passwords/keys.
 
@@ -81,16 +94,18 @@ Never commit real tokens. The app never logs tokens/passwords/keys.
 ./gradlew :app:lintDebug
 ```
 
-65 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
-folder-tree (nesting, orphans, cycles), terminal buffer + key bytes, SSH key
-generation, sync API (auth header, HTTPS rules, error mapping), quick-connect.
+120 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
+folder-tree (nesting, orphans, cycles), terminal buffer (incl. alt-screen,
+margins, erase/insert/delete, DSR, split UTF-8) + key bytes + one-shot
+modifier mappings + demo-shell line discipline, SSH key generation, sync API
+(auth header, HTTPS rules, error mapping), quick-connect.
 
 ## Architecture
 
 - Single-activity Compose + Navigation (Hosts / Terminal / Sync), Material3, edge-to-edge.
 - `data/sync`: Retrofit API + `TabbyYamlParser` + `TabbyYamlSerializer` + `FolderTree` + `SyncRepository`.
 - `data/local`: DataStore `ProfileRepository`, Keystore `SecureTokenStorage`.
-- `data/ssh`: `SshConnection` (mwiede JSch, IO dispatcher) + `TerminalBuffer` (own VT subset) + `CtrlKeys` + `SshKeyManager`.
+- `data/ssh`: `TerminalConnection` interface + `SshConnection` (mwiede JSch, IO dispatcher) + `LocalShellConnection` (on-device demo shell) + `TerminalBuffer` (own VT subset) + `CtrlKeys` + `SshKeyManager`.
 - `ui/state`: `ConnectionsViewModel`, `TerminalTabsViewModel` (survives rotation), `SyncAccountsViewModel`, `SshKeysViewModel`.
 
 Known limits: no `ssh-ed25519` server host keys (JSch), no SFTP browser yet, no

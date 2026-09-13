@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
@@ -99,6 +100,26 @@ fun ConnectionsScreen(
     var showAuth by remember { mutableStateOf<SshProfile?>(null) }
     var actionsFor by remember { mutableStateOf<SshProfile?>(null) }
     var pendingDelete by remember { mutableStateOf<SshProfile?>(null) }
+    var editingHost by remember { mutableStateOf<SshProfile?>(null) }
+
+    // Tap play = direct connect when auth is already set up (saved password
+    // or key); otherwise fall back to the auth dialog. Long-press edits.
+    fun connectOrAsk(p: SshProfile) {
+        val hasPw = vm.getPassword(p.id).isNotBlank() || SessionPasswords.peek(p.id).isNotBlank()
+        val key = p.keyId?.let { keysVm.loadKey(it) } ?: SessionKeys.peek(p.id)
+        if (p.keyId != null && key != null) {
+            SessionKeys.put(p.id, key)
+            SessionPasswords.put(p.id, SessionPasswords.peek(p.id).ifBlank { vm.getPassword(p.id) })
+            tabsVm.open(p)
+            onOpenTerminal()
+        } else if (p.keyId == null && hasPw) {
+            SessionPasswords.put(p.id, SessionPasswords.peek(p.id).ifBlank { vm.getPassword(p.id) })
+            tabsVm.open(p)
+            onOpenTerminal()
+        } else {
+            showAuth = p
+        }
+    }
 
     LaunchedEffect(state.syncMessage) {
         state.syncMessage?.let { snack.showSnackbar(it); vm.dismissMessage() }
@@ -143,10 +164,11 @@ fun ConnectionsScreen(
                 p = p,
                 pinned = pinned,
                 depth = depth,
-                onConnect = { showAuth = p },
+                onConnect = { connectOrAsk(p) },
                 onLongPress = { actionsFor = p },
                 onMoveUp = { vm.movePin(p.id, Pin.HOST, -1) },
                 onMoveDown = { vm.movePin(p.id, Pin.HOST, 1) },
+                modifier = Modifier.animateItemPlacement(),
             )
         }
     }
@@ -199,6 +221,13 @@ fun ConnectionsScreen(
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    TextButton(onClick = { showAdd = true }) { Text("Add host") }
+                                    Button(onClick = {
+                                        tabsVm.openDemoShell()
+                                        onOpenTerminal()
+                                    }) { Text("Try demo shell") }
+                                }
                             }
                         }
                     }
@@ -278,14 +307,23 @@ fun ConnectionsScreen(
         }
     }
 
-    // long-press actions: pin/unpin + delete
+    // long-press actions: pin/unpin + edit + delete
     actionsFor?.let { p ->
         HostActionsDialog(
             title = p.name,
             pinLabel = if (isPinnedHost(p.id)) "Unpin from top" else "Pin to top",
             onPin = { vm.togglePinHost(p); actionsFor = null },
+            onEdit = { editingHost = p; actionsFor = null },
             onDelete = { pendingDelete = p; actionsFor = null },
             onDismiss = { actionsFor = null },
+        )
+    }
+    editingHost?.let { p ->
+        EditHostDialog(
+            profile = p,
+            vm = vm,
+            keysVm = keysVm,
+            onDismiss = { editingHost = null },
         )
     }
     pendingDelete?.let { p ->
@@ -457,9 +495,10 @@ private fun HostCard(
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     depth: Int = 0,
+    modifier: Modifier = Modifier,
 ) {
     ElevatedCard(
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
             .padding(horizontal = (12 + depth * 14).dp)
             .combinedClickable(onClick = onConnect, onLongClick = onLongPress),
         colors = CardDefaults.elevatedCardColors(
@@ -513,6 +552,7 @@ private fun HostActionsDialog(
     title: String,
     pinLabel: String,
     onPin: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -524,6 +564,9 @@ private fun HostActionsDialog(
                 TextButton(onClick = onPin, modifier = Modifier.fillMaxWidth()) {
                     Text(pinLabel, modifier = Modifier.fillMaxWidth())
                 }
+                TextButton(onClick = onEdit, modifier = Modifier.fillMaxWidth()) {
+                    Text("Edit host", modifier = Modifier.fillMaxWidth())
+                }
                 TextButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) {
                     Text("Delete", color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
                 }
@@ -532,6 +575,98 @@ private fun HostActionsDialog(
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/**
+ * Full host editor (long-press → Edit): name/host/port/user plus key
+ * assignment. Password changes go through the connect dialog (stored
+ * encrypted); this edits the profile itself for manual AND synced hosts
+ * (synced edits persist locally and upload on next Upload).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EditHostDialog(
+    profile: SshProfile,
+    vm: ConnectionsViewModel,
+    keysVm: SshKeysViewModel,
+    onDismiss: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val keys by keysVm.keys.collectAsState()
+    var name by remember(profile.id) { mutableStateOf(profile.name) }
+    var host by remember(profile.id) { mutableStateOf(profile.host) }
+    var port by remember(profile.id) { mutableStateOf(profile.port.toString()) }
+    var user by remember(profile.id) { mutableStateOf(profile.username) }
+    var keyId by remember(profile.id) { mutableStateOf(profile.keyId) }
+    var keyMenu by remember { mutableStateOf(false) }
+    var showKeys by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit host") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, singleLine = true)
+                OutlinedTextField(value = host, onValueChange = { host = it }, label = { Text("Host") }, singleLine = true)
+                OutlinedTextField(value = port, onValueChange = { port = it }, label = { Text("Port") }, singleLine = true)
+                OutlinedTextField(value = user, onValueChange = { user = it }, label = { Text("User") }, singleLine = true)
+                ExposedDropdownMenuBox(expanded = keyMenu, onExpandedChange = { keyMenu = it }) {
+                    OutlinedTextField(
+                        value = keys.find { it.id == keyId }?.name ?: "Password only",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("SSH key") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(keyMenu) },
+                        modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true).fillMaxWidth(),
+                    )
+                    ExposedDropdownMenu(expanded = keyMenu, onDismissRequest = { keyMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Password only") },
+                            onClick = { keyId = null; keyMenu = false },
+                        )
+                        keys.forEach { k ->
+                            DropdownMenuItem(
+                                text = { Text(k.name) },
+                                onClick = { keyId = k.id; keyMenu = false },
+                            )
+                        }
+                    }
+                }
+                TextButton(onClick = { showKeys = true }) {
+                    Icon(Icons.Filled.Key, null)
+                    Text("Manage keys")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (host.isBlank()) return@TextButton
+                    val updated = profile.copy(
+                        name = name.ifBlank { host.trim() },
+                        host = host.trim(),
+                        port = port.toIntOrNull()?.coerceIn(1, 65535) ?: 22,
+                        username = user.ifBlank { "root" },
+                        keyId = keyId,
+                    )
+                    scope.launch {
+                        if (updated.origin == "manual") {
+                            vm.saveManualProfile(updated, "")
+                        } else {
+                            vm.updateSyncedProfile(updated)
+                        }
+                        onDismiss()
+                    }
+                },
+                enabled = host.isNotBlank(),
+            ) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+
+    if (showKeys) {
+        KeysDialog(keysVm = keysVm, onDismiss = { showKeys = false })
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -640,6 +775,7 @@ object SessionPasswords {
     private val map = mutableMapOf<String, String>()
     @Synchronized fun put(id: String, pw: String) { map[id] = pw }
     @Synchronized fun take(id: String): String = map.remove(id).orEmpty()
+    @Synchronized fun peek(id: String): String = map[id].orEmpty()
 }
 
 /** Ephemeral in-memory private-key material (PEM + passphrase), same lifecycle as passwords. */
@@ -647,4 +783,5 @@ object SessionKeys {
     private val map = mutableMapOf<String, Pair<String, String>>()
     @Synchronized fun put(id: String, key: Pair<String, String>) { map[id] = key }
     @Synchronized fun take(id: String): Pair<String, String>? = map.remove(id)
+    @Synchronized fun peek(id: String): Pair<String, String>? = map[id]
 }

@@ -257,7 +257,11 @@ class ConnectionsViewModel(app: Application) : AndroidViewModel(app) {
 
 /** Holds live SSH tabs (browser-style, Termius-like). Survives rotation via ViewModel. */
 class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
-    data class Tab(val id: String = UUID.randomUUID().toString(), val profile: SshProfile, val conn: SshConnection)
+    data class Tab(
+        val id: String = UUID.randomUUID().toString(),
+        val profile: SshProfile,
+        val conn: at.websters.tabbyandroid.data.ssh.TerminalConnection,
+    )
 
     private val repo = ProfileRepository(app)
 
@@ -273,9 +277,9 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
      * that composes before the first DataStore emission lands.
      */
     val uiPrefs: StateFlow<at.websters.tabbyandroid.data.local.UiPrefs> = combine(
-        repo.uiFontSize, repo.uiFollow, repo.uiKeyRows,
-    ) { fontSize, follow, keyRows ->
-        at.websters.tabbyandroid.data.local.UiPrefs(fontSize, follow, keyRows)
+        repo.uiFontSize, repo.uiFollow, repo.uiKeyRows, repo.uiFullscreen,
+    ) { fontSize, follow, keyRows, fullscreen ->
+        at.websters.tabbyandroid.data.local.UiPrefs(fontSize, follow, keyRows, fullscreen)
     }.stateIn(
         viewModelScope, SharingStarted.Eagerly,
         at.websters.tabbyandroid.data.local.UiPrefs(),
@@ -293,6 +297,40 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repo.setUiKeyRows(rows) }
     }
 
+    fun setUiFullscreen(fullscreen: Boolean) {
+        viewModelScope.launch { repo.setUiFullscreen(fullscreen) }
+    }
+
+    init {
+        // Restore previously open tabs (as disconnected tabs — creds reload
+        // from encrypted storage on reconnect, never from the tab record).
+        viewModelScope.launch {
+            val saved = repo.openTabs.first()
+            if (saved.isNotEmpty() && _tabs.value.isEmpty()) {
+                val knownHosts = java.io.File(
+                    getApplication<Application>().filesDir,
+                    at.websters.tabbyandroid.data.ssh.KNOWN_HOSTS_NAME,
+                )
+                _tabs.value = saved.map { p ->
+                    val conn: at.websters.tabbyandroid.data.ssh.TerminalConnection =
+                        if (p.id.startsWith(at.websters.tabbyandroid.data.ssh.DEMO_SHELL_PREFIX)) {
+                            at.websters.tabbyandroid.data.ssh.LocalShellConnection(p)
+                        } else {
+                            SshConnection(p, knownHostsFile = knownHosts)
+                        }
+                    Tab(profile = p, conn = conn)
+                }
+                _active.value = _tabs.value.lastOrNull()?.id
+            }
+        }
+    }
+
+    private fun persistTabs() {
+        viewModelScope.launch {
+            repo.saveOpenTabs(_tabs.value.map { it.profile })
+        }
+    }
+
     fun open(profile: SshProfile): String {
         val knownHosts = java.io.File(
             getApplication<Application>().filesDir,
@@ -301,10 +339,26 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
         val tab = Tab(profile = profile, conn = SshConnection(profile, knownHostsFile = knownHosts))
         _tabs.value = _tabs.value + tab
         _active.value = tab.id
+        persistTabs()
         return tab.id
     }
 
     fun openQuick(query: String): String = open(QuickConnectParser.parse(query))
+
+    /** Opens the on-device demo shell (no server, no sync needed). */
+    fun openDemoShell(): String {
+        val existing = _tabs.value.find { it.profile.id.startsWith(at.websters.tabbyandroid.data.ssh.DEMO_SHELL_PREFIX) }
+        if (existing != null) {
+            _active.value = existing.id
+            return existing.id
+        }
+        val profile = at.websters.tabbyandroid.data.ssh.demoShellProfile()
+        val tab = Tab(profile = profile, conn = at.websters.tabbyandroid.data.ssh.LocalShellConnection(profile))
+        _tabs.value = _tabs.value + tab
+        _active.value = tab.id
+        persistTabs()
+        return tab.id
+    }
 
     fun select(id: String) { _active.value = id }
 
@@ -316,6 +370,7 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
         }
         _tabs.value = _tabs.value.filterNot { it.id == id }
         if (_active.value == id) _active.value = _tabs.value.lastOrNull()?.id
+        persistTabs()
     }
 
     override fun onCleared() {

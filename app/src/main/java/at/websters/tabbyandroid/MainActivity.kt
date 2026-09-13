@@ -27,6 +27,32 @@ import kotlinx.coroutines.launch
  * FragmentActivity (not ComponentActivity) so screens can show biometric prompts.
  */
 class MainActivity : FragmentActivity() {
+    @Volatile private var latestAllowScreen = false
+
+    private fun applyScreenCapture(allow: Boolean) {
+        latestAllowScreen = allow
+        if (allow) {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_SECURE,
+            )
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // re-apply (the collector also drives this; resume covers edge cases
+        // like the flag being re-set by the system while paused)
+        applyScreenCapture(latestAllowScreen)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) applyScreenCapture(latestAllowScreen)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -36,14 +62,7 @@ class MainActivity : FragmentActivity() {
         )
         lifecycleScope.launch {
             ProfileRepository(applicationContext).allowScreenCapture.collect { allow ->
-                if (allow) {
-                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-                } else {
-                    window.setFlags(
-                        WindowManager.LayoutParams.FLAG_SECURE,
-                        WindowManager.LayoutParams.FLAG_SECURE,
-                    )
-                }
+                applyScreenCapture(allow)
             }
         }
         setContent {

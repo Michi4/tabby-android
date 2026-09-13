@@ -5,7 +5,6 @@ import com.jcraft.jsch.ChannelShell
 import com.jcraft.jsch.HostKey
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
-import java.io.Closeable
 import java.io.File
 import java.security.MessageDigest
 import java.util.Properties
@@ -34,20 +33,20 @@ const val KNOWN_HOSTS_NAME = "known_hosts"
  *   reinstalled (possible MITM otherwise); accepting REPLACES the pin.
  */
 class SshConnection(
-    val profile: SshProfile,
-    val buffer: TerminalBuffer = TerminalBuffer(cols = 80, rows = 24),
+    override val profile: SshProfile,
+    override val buffer: TerminalBuffer = TerminalBuffer(cols = 80, rows = 24),
     val knownHostsFile: File? = null,
-) : Closeable {
+) : TerminalConnection {
     private val _state = MutableStateFlow(SshState.DISCONNECTED)
-    val state: StateFlow<SshState> = _state
+    override val state: StateFlow<SshState> = _state
     private val _status = MutableStateFlow("")
-    val status: StateFlow<String> = _status
+    override val status: StateFlow<String> = _status
 
-    @Volatile var pendingHostKey: String? = null
+    @Volatile override var pendingHostKey: String? = null
         private set
 
     /** True when the pending key REPLACES a previously saved one (possible MITM). */
-    @Volatile var pendingHostKeyChanged: Boolean = false
+    @Volatile override var pendingHostKeyChanged: Boolean = false
         private set
 
     @Volatile private var pendingKey: HostKey? = null
@@ -58,11 +57,11 @@ class SshConnection(
     /** Our end of the stdin pipe (canonical JSch shell input pattern). */
     private var shellInput: java.io.PipedOutputStream? = null
 
-    suspend fun connect(
+    override suspend fun connect(
         password: String,
-        privateKeyPem: String? = null,
-        privateKeyPassphrase: String? = null,
-        acceptHostKey: Boolean = false,
+        privateKeyPem: String?,
+        privateKeyPassphrase: String?,
+        acceptHostKey: Boolean,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         pendingHostKey = null
         pendingHostKeyChanged = false
@@ -160,7 +159,18 @@ class SshConnection(
                 while (true) {
                     val n = input.read(buf)
                     if (n < 0) break
-                    if (n > 0) buffer.feed(buf, 0, n)
+                    if (n > 0) {
+                        buffer.feed(buf, 0, n)
+                        // terminal replies (DSR/CPR) must go back to the server,
+                        // otherwise full-screen apps stall waiting for them
+                        for (reply in buffer.takePendingOutput()) {
+                            try {
+                                shellInput?.write(reply)
+                                shellInput?.flush()
+                            } catch (_: Exception) {
+                            }
+                        }
+                    }
                 }
             } catch (_: Exception) {
             } finally {
@@ -206,7 +216,7 @@ class SshConnection(
         }.getOrDefault(false)
     }
 
-    fun send(text: String) {
+    override fun send(text: String) {
         try {
             shellInput?.write(text.toByteArray())
             shellInput?.flush()
@@ -214,7 +224,15 @@ class SshConnection(
         }
     }
 
-    fun sendKey(key: String) = send(key)
+    override fun sendKey(key: String) = send(key)
+
+    /** Resize the remote pty (e.g. after rotation / font change). Best-effort. */
+    override fun setPtySize(cols: Int, rows: Int) {
+        try {
+            channel?.setPtySize(cols.coerceIn(20, 300), rows.coerceIn(10, 200), 0, 0)
+        } catch (_: Exception) {
+        }
+    }
 
     override fun close() {
         try { readerJob?.cancel() } catch (_: Exception) {}
@@ -258,7 +276,8 @@ fun SshConnection.friendlyError(e: Exception): String {
         m.contains("has been changed", ignoreCase = true) ->
             "HOST KEY CHANGED — the server's key differs from the saved one. " +
                 "Possible attack: review in the popup and accept only if you " +
-                "reinstalled the server on purpose."
+                "reinstalled the server on purpose. " +
+                "To start over, use Forget saved host keys (Settings → Privacy)."
         m.contains("ECONNREFUSED", ignoreCase = true) || m.contains("Connection refused", ignoreCase = true) ->
             "Connection refused — is SSH running on ${profile.host}:${profile.port}?"
         m.contains("Auth fail", ignoreCase = true) ->

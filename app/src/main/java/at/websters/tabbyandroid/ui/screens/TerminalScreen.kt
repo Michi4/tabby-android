@@ -1,19 +1,33 @@
 package at.websters.tabbyandroid.ui.screens
 
 import android.widget.Toast
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,6 +44,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.LinkOff
@@ -45,6 +61,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -64,6 +81,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
@@ -88,15 +106,21 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import at.websters.tabbyandroid.data.local.UiPrefs
+import at.websters.tabbyandroid.data.local.UiPrefsDefaults
 import at.websters.tabbyandroid.data.ssh.CtrlKeys
+import at.websters.tabbyandroid.data.ssh.DEMO_SHELL_PREFIX
 import at.websters.tabbyandroid.data.ssh.SENDER_SENTINEL
 import at.websters.tabbyandroid.data.ssh.SshState
 import at.websters.tabbyandroid.data.ssh.TerminalBuffer
 import at.websters.tabbyandroid.data.ssh.senderEdit
+import at.websters.tabbyandroid.ui.state.ConnectionsViewModel
+import at.websters.tabbyandroid.ui.state.SshKeysViewModel
 import at.websters.tabbyandroid.ui.state.TerminalTabsViewModel
 import at.websters.tabbyandroid.ui.theme.statusColor
 import at.websters.tabbyandroid.ui.theme.termColor
@@ -104,118 +128,140 @@ import kotlinx.coroutines.launch
 
 internal const val ESC = "\u001B"
 
+/** One-shot/locked modifier state: tap = one-shot, tap again = lock, tap again = off. */
+internal enum class ModMode { OFF, ONE_SHOT, LOCKED }
+
+internal fun nextModMode(cur: ModMode): ModMode = when (cur) {
+    ModMode.OFF -> ModMode.ONE_SHOT
+    ModMode.ONE_SHOT -> ModMode.LOCKED
+    ModMode.LOCKED -> ModMode.OFF
+}
+
 /**
  * Termius-like terminal: browser-style tabs, read-only screen that looks
  * like direct input (an invisible sender owns the typed line; every commit
- * goes straight into SSH exactly once; tap the screen to focus), sticky
- * CTRL/ALT toggles, collapsible extended keys, long-press to copy,
- * stick-to-bottom follow that never yanks scrolled-up reading. Tuned for
- * tall 144Hz panels (RedMagic 10 Pro): version-gated snapshots.
+ * goes straight into SSH exactly once; tap the screen to focus), one-shot
+ * CTRL/ALT/ALTGR in the top key row (tap = next key only, double-tap = lock),
+ * collapsible extended keys, fullscreen mode, long-press to copy,
+ * stick-to-bottom follow that never yanks scrolled-up reading.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
+fun TerminalScreen(
+    tabsVm: TerminalTabsViewModel,
+    connectionsVm: ConnectionsViewModel = viewModel(),
+    keysVm: SshKeysViewModel = viewModel(),
+) {
     val tabs by tabsVm.tabs.collectAsState()
     val activeId by tabsVm.active.collectAsState()
     val prefs by tabsVm.uiPrefs.collectAsState()
     var showQuick by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
+        AnimatedVisibility(
+            visible = !prefs.fullscreen,
+            enter = fadeIn(tween(200)),
+            exit = fadeOut(tween(200)),
+        ) {
+            Column {
         // ---- slim header: no wasted space, bottom nav already says where we are ----
         val active = tabs.find { it.id == activeId }
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(
-                onClick = {
-                    val i = tabs.indexOfFirst { it.id == activeId }
-                    if (tabs.isNotEmpty()) tabsVm.select(tabs[(i - 1 + tabs.size) % tabs.size].id)
-                },
-                enabled = tabs.size > 1,
-            ) { Icon(Icons.Filled.ChevronLeft, "Previous tab") }
-            Column(Modifier.weight(1f)) {
-                Text(
-                    active?.profile?.name ?: "Terminal",
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                if (active != null) {
-                    val status by active.conn.status.collectAsState()
+                IconButton(
+                    onClick = {
+                        val i = tabs.indexOfFirst { it.id == activeId }
+                        if (tabs.isNotEmpty()) tabsVm.select(tabs[(i - 1 + tabs.size) % tabs.size].id)
+                    },
+                    enabled = tabs.size > 1,
+                ) { Icon(Icons.Filled.ChevronLeft, "Previous tab") }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        active?.profile?.name ?: "Terminal",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    if (active != null) {
+                        val status by active.conn.status.collectAsState()
                         Text(
                             listOf(active.profile.label(), status)
-                            .filter { it.isNotBlank() }
-                            .joinToString(" • "),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            IconButton(
-                onClick = {
-                    val i = tabs.indexOfFirst { it.id == activeId }
-                    if (tabs.isNotEmpty()) tabsVm.select(tabs[(i + 1) % tabs.size].id)
-                },
-                enabled = tabs.size > 1,
-            ) { Icon(Icons.Filled.ChevronRight, "Next tab") }
-            IconButton(onClick = { showQuick = true }) { Icon(Icons.Filled.Add, "New tab") }
-            // single tab: no strip needed, but keep a way to close it
-            if (tabs.size == 1 && active != null) {
-                IconButton(onClick = { tabsVm.close(active.id) }) {
-                    Icon(Icons.Filled.Close, "Close tab")
-                }
-            }
-        }
-
-        // ---- tab strip (only for 2+ tabs, to leave room for the terminal) ----
-        if (tabs.size > 1) {
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            if (tabs.isEmpty()) {
-                Text(
-                    "No tabs — open a host from Hosts or tap +",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(8.dp),
-                )
-            }
-            tabs.forEach { t ->
-                val st by t.conn.state.collectAsState()
-                val selected = t.id == activeId
-                Row(
-                    Modifier.height(36.dp)
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(
-                            if (selected) MaterialTheme.colorScheme.primaryContainer
-                            else MaterialTheme.colorScheme.surfaceVariant
+                                .filter { it.isNotBlank() }
+                                .joinToString(" • "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        .clickable { tabsVm.select(t.id) }
-                        .padding(start = 10.dp, end = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("●", color = statusColor(st), fontSize = 10.sp)
-                    Text(
-                        t.profile.name,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(start = 6.dp),
-                    )
-                    IconButton(
-                        onClick = { tabsVm.close(t.id) },
-                        modifier = Modifier.size(28.dp),
-                    ) {
-                        Icon(Icons.Filled.Close, "Close tab", modifier = Modifier.size(16.dp))
+                    }
+                }
+                IconButton(
+                    onClick = {
+                        val i = tabs.indexOfFirst { it.id == activeId }
+                        if (tabs.isNotEmpty()) tabsVm.select(tabs[(i + 1) % tabs.size].id)
+                    },
+                    enabled = tabs.size > 1,
+                ) { Icon(Icons.Filled.ChevronRight, "Next tab") }
+                IconButton(onClick = { showQuick = true }) { Icon(Icons.Filled.Add, "New tab") }
+                // single tab: no strip needed, but keep a way to close it
+                if (tabs.size == 1 && active != null) {
+                    IconButton(onClick = { tabsVm.close(active.id) }) {
+                        Icon(Icons.Filled.Close, "Close tab")
                     }
                 }
             }
-        }
+
+            // ---- tab strip (only for 2+ tabs, to leave room for the terminal) ----
+            if (tabs.size > 1) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (tabs.isEmpty()) {
+                    Text(
+                        "No tabs — open a host from Hosts or tap +",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(8.dp),
+                    )
+                }
+                tabs.forEach { t ->
+                    val st by t.conn.state.collectAsState()
+                    val selected = t.id == activeId
+                    Row(
+                        Modifier.height(36.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(
+                                if (selected) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surfaceVariant
+                            )
+                            .clickable { tabsVm.select(t.id) }
+                            .padding(start = 10.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("●", color = statusColor(st), fontSize = 10.sp)
+                        Text(
+                            t.profile.name,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(start = 6.dp),
+                        )
+                        IconButton(
+                            onClick = { tabsVm.close(t.id) },
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(Icons.Filled.Close, "Close tab", modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+            }
+            }
+            }
         }
 
         val current = tabs.find { it.id == activeId } ?: tabs.lastOrNull()
@@ -224,11 +270,36 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("No terminal tabs", style = MaterialTheme.typography.titleMedium)
                     Text("Open a host from Hosts, tap + at the top right, or start here:")
-                    Button(onClick = { showQuick = true }) { Text("Quick connect") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { showQuick = true }) { Text("Quick connect") }
+                        OutlinedButton(onClick = { tabsVm.openDemoShell() }) { Text("Demo shell") }
+                    }
                 }
             }
         } else {
-            TerminalTabBody(tab = current, prefs = prefs, modifier = Modifier.weight(1f))
+            // swipe-style tab switch: slides in the tab order direction
+            AnimatedContent(
+                targetState = current.id,
+                transitionSpec = {
+                    val from = tabs.indexOfFirst { it.id == initialState }
+                    val to = tabs.indexOfFirst { it.id == targetState }
+                    val dir = if (to >= from) 1 else -1
+                    (slideInHorizontally(tween(250)) { it * dir } + fadeIn(tween(250)))
+                        .togetherWith(slideOutHorizontally(tween(250)) { -it * dir } + fadeOut(tween(250)))
+                },
+                label = "terminal-tabs",
+                modifier = Modifier.weight(1f),
+            ) { id ->
+                val shown = tabs.find { it.id == id } ?: current
+                TerminalTabBody(
+                    tab = shown,
+                    prefs = prefs,
+                    tabsVm = tabsVm,
+                    connectionsVm = connectionsVm,
+                    keysVm = keysVm,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
         }
     }
 
@@ -238,10 +309,19 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
             onDismissRequest = { showQuick = false },
             title = { Text("Quick connect") },
             text = {
-                OutlinedTextField(
-                    value = quick, onValueChange = { quick = it },
-                    label = { Text("user@host:port") }, singleLine = true,
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = quick, onValueChange = { quick = it },
+                        label = { Text("user@host:port") }, singleLine = true,
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            tabsVm.openDemoShell()
+                            showQuick = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Try the demo shell (no server)") }
+                }
             },
             confirmButton = {
                 TextButton(
@@ -259,10 +339,14 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TerminalTabBody(
     tab: TerminalTabsViewModel.Tab,
     prefs: UiPrefs,
+    tabsVm: TerminalTabsViewModel,
+    connectionsVm: ConnectionsViewModel,
+    keysVm: SshKeysViewModel,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -271,19 +355,39 @@ private fun TerminalTabBody(
     val state by tab.conn.state.collectAsState()
     val connStatus by tab.conn.status.collectAsState()
     val version by tab.conn.buffer.updates.collectAsState()
+    val allKeys by keysVm.keys.collectAsState()
     var showHostKey by remember { mutableStateOf<String?>(null) }
     // runtime toggles, seeded from Settings → Terminal (new tabs only)
     var follow by remember(tab.id) { mutableStateOf(prefs.follow) }
     var fontSize by remember(tab.id) { mutableIntStateOf(prefs.fontSize) }
     var pwVisible by remember { mutableStateOf(false) }
-    var ctrl by remember(tab.id) { mutableStateOf(false) }
-    var alt by remember(tab.id) { mutableStateOf(false) }
+    // one-shot modifiers live in the top key row (tap = next key, 2×tap = lock)
+    var ctrlMode by remember(tab.id) { mutableStateOf(ModMode.OFF) }
+    var altMode by remember(tab.id) { mutableStateOf(ModMode.OFF) }
+    var altGrMode by remember(tab.id) { mutableStateOf(ModMode.OFF) }
     // extended-key rows on screen: 3 -> 2 -> 1 -> hidden, cycles on toggle
     // (saveable: survives rotation per tab)
     var keyRows by rememberSaveable(tab.id) { mutableIntStateOf(prefs.keyRows) }
-    var password by remember(tab.id) { mutableStateOf(SessionPasswords.take(tab.profile.id)) }
+    // ephemeral creds (just-entered) win; stored creds (encrypted) are the fallback
+    // so reconnect works after backgrounding / process death without re-typing
+    val ephemeralPw = remember(tab.id) { SessionPasswords.take(tab.profile.id) }
+    val ephemeralKey = remember(tab.id) { SessionKeys.take(tab.profile.id) }
+    val storedPw = remember(tab.profile.id, allKeys) { connectionsVm.getPassword(tab.profile.id) }
+    val storedKey = remember(tab.profile.id, allKeys) {
+        tab.profile.keyId?.let { kid -> keysVm.loadKey(kid) }
+    }
+    val keyMat = ephemeralKey ?: storedKey
+    val savedPw = if (ephemeralPw.isNotBlank()) ephemeralPw else storedPw
+    var password by remember(tab.id) {
+        mutableStateOf(if (ephemeralPw.isNotBlank()) ephemeralPw else "")
+    }
+    var showPwField by remember(tab.id) {
+        mutableStateOf(keyMat == null && savedPw.isBlank())
+    }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    var inputFocused by remember { mutableStateOf(false) }
+    val imeVisible = WindowInsets.isImeVisible
     var input by remember(tab.id) {
         mutableStateOf(TextFieldValue(SENDER_SENTINEL, TextRange(SENDER_SENTINEL.length)))
     }
@@ -301,102 +405,152 @@ private fun TerminalTabBody(
         }
     }
 
-    // key material + password, taken once per tab and remembered across retries
-    val keyMat = remember(tab.id) { SessionKeys.take(tab.profile.id) }
+    fun clearOneShots() {
+        if (ctrlMode == ModMode.ONE_SHOT) ctrlMode = ModMode.OFF
+        if (altMode == ModMode.ONE_SHOT) altMode = ModMode.OFF
+        if (altGrMode == ModMode.ONE_SHOT) altGrMode = ModMode.OFF
+    }
+
+    fun sendWithMods(seq: String) {
+        val c = ctrlMode != ModMode.OFF
+        val a = altMode != ModMode.OFF || altGrMode != ModMode.OFF
+        tab.conn.send(CtrlKeys.withModifiers(seq, c, a))
+        clearOneShots()
+    }
 
     fun sendTermChar(ch: Char) {
-        when {
-            ch == '\n' -> tab.conn.send("\r")
-            ctrl -> {
-                val b = if (ch.isLetter()) CtrlKeys.ctrlByte(ch) else null
-                if (b != null) tab.conn.send(CtrlKeys.byteString(b)) else tab.conn.send(ch.toString())
-            }
-            alt -> tab.conn.send(CtrlKeys.altSeq(ch))
-            else -> tab.conn.send(ch.toString())
+        if (ch == '\n') {
+            sendWithMods("\r")
+            return
         }
+        val c = ctrlMode != ModMode.OFF
+        val a = altMode != ModMode.OFF || altGrMode != ModMode.OFF
+        if (!c && !a) {
+            tab.conn.send(ch.toString())
+        } else {
+            tab.conn.send(CtrlKeys.withModifiers(ch.toString(), c, a))
+        }
+        clearOneShots()
     }
 
     // Submit (Return): run the line, then clear the sender for the next one.
     fun submitReturn() {
         suppressReplay = input.text.replace(SENDER_SENTINEL, "")
-        tab.conn.send("\r")
+        sendWithMods("\r")
         input = TextFieldValue(SENDER_SENTINEL, TextRange(SENDER_SENTINEL.length))
     }
 
+    fun doConnect(pw: String) {
+        scope.launch {
+            val r = tab.conn.connect(pw, keyMat?.first, keyMat?.second)
+            if (r.isFailure && r.exceptionOrNull() is at.websters.tabbyandroid.data.ssh.UnknownHostKeyException) {
+                showHostKey = tab.conn.pendingHostKey
+            } else if (r.isSuccess) {
+                // ready to type: focus the sender, pop the keyboard
+                focusRequester.requestFocus()
+                keyboard?.show()
+            }
+        }
+    }
+
+    // demo shell needs no auth: start it as soon as the tab opens
+    val isDemo = tab.profile.id.startsWith(DEMO_SHELL_PREFIX)
+    LaunchedEffect(tab.id) {
+        if (isDemo && tab.conn.state.value == SshState.DISCONNECTED) doConnect("")
+    }
+
     Column(modifier.fillMaxSize()) {
-        // ---- toolbar ----
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                .padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(onClick = { keyRows = if (keyRows <= 0) 3 else keyRows - 1 }) {
-                Icon(
-                    if (keyRows == 0) Icons.Filled.Keyboard else Icons.Filled.KeyboardHide,
-                    "Key rows: $keyRows of 3 (tap to cycle)",
-                    tint = if (keyRows == 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
-                )
-            }
-            IconButton(onClick = { fontSize = (fontSize - 1).coerceAtLeast(10) }) {
-                Icon(Icons.Filled.TextDecrease, "Smaller font")
-            }
-            IconButton(onClick = { fontSize = (fontSize + 1).coerceAtMost(20) }) {
-                Icon(Icons.Filled.TextIncrease, "Larger font")
-            }
-            FilterChip(selected = follow, onClick = { follow = !follow },
-                label = { Text("Follow") },
-                leadingIcon = { Icon(Icons.Filled.VerticalAlignBottom, null) })
-            FilterChip(selected = ctrl, onClick = { ctrl = !ctrl }, label = { Text("CTRL") })
-            FilterChip(selected = alt, onClick = { alt = !alt }, label = { Text("ALT") })
-        IconButton(onClick = {
-            at.websters.tabbyandroid.ui.util.copySensitive(context, tab.conn.buffer.visibleText())
-            Toast.makeText(context, "Screen copied", Toast.LENGTH_SHORT).show()
-        }) { Icon(Icons.Filled.ContentCopy, "Copy screen") }
+        AnimatedVisibility(
+            visible = !prefs.fullscreen,
+            enter = fadeIn(tween(200)),
+            exit = fadeOut(tween(200)),
+        ) {
+            // ---- toolbar (modifiers live in the top key row now, not here) ----
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = { keyRows = if (keyRows <= 0) 3 else keyRows - 1 }) {
+                    Icon(
+                        if (keyRows == 0) Icons.Filled.Keyboard else Icons.Filled.KeyboardHide,
+                        "Key rows: $keyRows of 3 (tap to cycle)",
+                        tint = if (keyRows == 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
+                    )
+                }
+                IconButton(onClick = { fontSize = (fontSize - 1).coerceAtLeast(UiPrefsDefaults.FONT_MIN) }) {
+                    Icon(Icons.Filled.TextDecrease, "Smaller font")
+                }
+                IconButton(onClick = { fontSize = (fontSize + 1).coerceAtMost(UiPrefsDefaults.FONT_MAX) }) {
+                    Icon(Icons.Filled.TextIncrease, "Larger font")
+                }
+                FilterChip(selected = follow, onClick = { follow = !follow },
+                    label = { Text("Follow") },
+                    leadingIcon = { Icon(Icons.Filled.VerticalAlignBottom, null) })
+                IconButton(onClick = { tabsVm.setUiFullscreen(true) }) {
+                    Icon(Icons.Filled.Fullscreen, "Fullscreen")
+                }
             IconButton(onClick = {
-                clipboard.getText()?.text?.let { tab.conn.send(it) }
-            }) { Icon(Icons.Filled.ContentPaste, "Paste") }
-            IconButton(onClick = { tab.conn.buffer.reset() }) {
-                Icon(Icons.Filled.DeleteSweep, "Clear screen")
-            }
-            if (state == SshState.CONNECTED) {
-                IconButton(onClick = { tab.conn.close() }) {
-                    Icon(Icons.Filled.LinkOff, "Disconnect", tint = MaterialTheme.colorScheme.error)
+                at.websters.tabbyandroid.ui.util.copySensitive(context, tab.conn.buffer.visibleText())
+                Toast.makeText(context, "Screen copied", Toast.LENGTH_SHORT).show()
+            }) { Icon(Icons.Filled.ContentCopy, "Copy screen") }
+                IconButton(onClick = {
+                    clipboard.getText()?.text?.let { tab.conn.send(it) }
+                }) { Icon(Icons.Filled.ContentPaste, "Paste") }
+                IconButton(onClick = { tab.conn.buffer.reset() }) {
+                    Icon(Icons.Filled.DeleteSweep, "Clear screen")
+                }
+                if (state == SshState.CONNECTED) {
+                    IconButton(onClick = { tab.conn.close() }) {
+                        Icon(Icons.Filled.LinkOff, "Disconnect", tint = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
         }
 
         // ---- screen is OUTPUT ONLY (read-only, selectable); typing goes
         // through the sender bar below, and tapping the screen focuses it.
-        // The old editable-screen design fought the IME over server echo
-        // (lost/doubled keystrokes); this split can't desync by construction:
-        // every commit is forwarded exactly once, then the field resets.
-        val rows = tab.conn.buffer.rows
-        val primary = MaterialTheme.colorScheme.primary
-        val rendered = remember(version, tab.id, primary) { renderScreen(snapshot, rows, primary) }
-        Column(
-            Modifier.weight(1f).fillMaxWidth()
-                .background(Color.Black)
-                .padding(8.dp)
-                .verticalScroll(scroll)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    // show() too: after an explicit BACK-close the system
-                    // won't re-open on focus alone
-                    onClick = { focusRequester.requestFocus(); keyboard?.show() },
-                ),
-        ) {
-            SelectionContainer {
-                Text(
-                    text = rendered,
-                    modifier = Modifier.fillMaxWidth(),
-                    style = TextStyle(
-                        color = Color.White,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = fontSize.sp,
-                        lineHeight = (fontSize + 5).sp,
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            val rows = tab.conn.buffer.rows
+            val primary = MaterialTheme.colorScheme.primary
+            val rendered = remember(version, tab.id, primary) { renderScreen(snapshot, rows, primary) }
+            Column(
+                Modifier.fillMaxSize()
+                    .background(Color.Black)
+                    .padding(8.dp)
+                    .verticalScroll(scroll)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { focusRequester.requestFocus(); keyboard?.show() },
                     ),
-                )
+            ) {
+                SelectionContainer {
+                    Text(
+                        text = rendered,
+                        modifier = Modifier.fillMaxWidth(),
+                        style = TextStyle(
+                            color = Color.White,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = fontSize.sp,
+                            lineHeight = (fontSize + 5).sp,
+                        ),
+                    )
+                }
+            }
+            if (prefs.fullscreen) {
+                // floating exit (translucent, out of the way)
+                IconButton(
+                    onClick = { tabsVm.setUiFullscreen(false) },
+                    modifier = Modifier.align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .alpha(0.7f),
+                ) {
+                    Icon(
+                        Icons.Filled.FullscreenExit, "Exit fullscreen",
+                        tint = Color.White,
+                    )
+                }
             }
         }
         // ---- sender bar: accumulates the line (Gboard owns the text, we only
@@ -433,6 +587,7 @@ private fun TerminalTabBody(
                 .height(1.dp)
                 .alpha(0f)
                 .focusRequester(focusRequester)
+                .onFocusChanged { inputFocused = it.isFocused }
                 .onKeyEvent {
                     if (it.type != KeyEventType.KeyDown) return@onKeyEvent false
                     when (it.key) {
@@ -454,9 +609,6 @@ private fun TerminalTabBody(
             ),
             cursorBrush = SolidColor(Color.White),
             singleLine = true,
-            // Password type (with visible text): the only reliable way to get
-            // zero suggestions/autocorrect/gesture — a terminal must send
-            // exactly what the user typed ("row-ok", never "Rowling").
             visualTransformation = VisualTransformation.None,
             keyboardOptions = KeyboardOptions(
                 capitalization = KeyboardCapitalization.None,
@@ -476,8 +628,39 @@ private fun TerminalTabBody(
             )
         }
 
-        if (state != SshState.CONNECTED) {
-                if (keyMat != null) {
+        if (isDemo) {
+            if (state == SshState.ERROR) {
+                Row(
+                    Modifier.fillMaxWidth().padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        connStatus,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(onClick = { doConnect("") }) { Text("Restart") }
+                }
+            } else if (state == SshState.DISCONNECTED && connStatus.isNotBlank()) {
+                // shell exited (e.g. Ctrl+D): one tap restarts, no auth needed
+                Row(
+                    Modifier.fillMaxWidth().padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        connStatus,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(onClick = { doConnect("") }) { Text("Restart") }
+                }
+            }
+        } else if (state != SshState.CONNECTED) {
+            if (keyMat != null) {
                 Text(
                     "🔑 key selected — password is the key passphrase (if any)",
                     style = MaterialTheme.typography.labelMedium,
@@ -485,47 +668,81 @@ private fun TerminalTabBody(
                     modifier = Modifier.padding(horizontal = 12.dp),
                 )
             }
-            Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = password, onValueChange = { password = it },
-                    label = { Text(if (keyMat != null) "Key passphrase (if any)" else "Password") },
-                    modifier = Modifier.weight(1f), singleLine = true,
-                    visualTransformation = if (pwVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        IconButton(onClick = { pwVisible = !pwVisible }) {
-                            Icon(if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Show")
-                        }
-                    },
-                )
-                Button(onClick = {
-                    scope.launch {
-                        val r = tab.conn.connect(password, keyMat?.first, keyMat?.second)
-                        if (r.isFailure && r.exceptionOrNull() is at.websters.tabbyandroid.data.ssh.UnknownHostKeyException) {
-                            showHostKey = tab.conn.pendingHostKey
-                        } else if (r.isSuccess) {
-                            // ready to type: focus the sender, pop the keyboard
-                            focusRequester.requestFocus()
-                            keyboard?.show()
-                        }
+            if (!showPwField && (keyMat != null || savedPw.isNotBlank())) {
+                // creds already saved: one tap reconnects, no password box
+                Row(
+                    Modifier.fillMaxWidth().padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        when {
+                            keyMat != null && savedPw.isNotBlank() -> "Key + saved passphrase ready"
+                            keyMat != null -> "Key ready — no passphrase needed?"
+                            else -> "Saved password ready"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { showPwField = true }) { Text("Change") }
+                    Button(onClick = { doConnect(password.ifBlank { savedPw }) }) {
+                        Text(if (state == SshState.CONNECTING) "…" else if (connStatus == "Disconnected") "Reconnect" else "Connect")
                     }
-                }) { Text(if (state == SshState.CONNECTING) "…" else "Connect") }
+                }
+            } else {
+                Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = password, onValueChange = { password = it },
+                        label = { Text(if (keyMat != null) "Key passphrase (if any)" else "Password") },
+                        modifier = Modifier.weight(1f), singleLine = true,
+                        visualTransformation = if (pwVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { pwVisible = !pwVisible }) {
+                                Icon(if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Show")
+                            }
+                        },
+                    )
+                    Button(onClick = { doConnect(password.ifBlank { savedPw }) }) {
+                        Text(if (state == SshState.CONNECTING) "…" else "Connect")
+                    }
+                }
             }
         }
 
-        // ---- extended keys: ride above the keyboard via IME insets, visible
-        // at all times; arrows on top, symbols (Enter) second, F-keys third.
-        // 8dp below mirrors the output padding above for symmetry. Combos live
-        // in the CTRL/ALT toggles + keyboard (no redundant rows).
-        // the Enter key submits (sends CR + clears the sender like a real Return)
-        Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).imePadding()) {
-            if (keyRows >= 1) {
-                KeyRow(NAV_KEYS) { tab.conn.send(it) }
-            }
-            if (keyRows >= 2) {
-                KeyRow(SYMBOL_KEYS) { seq -> if (seq == "\r") submitReturn() else tab.conn.send(seq) }
-            }
-            if (keyRows >= 3) {
-                KeyRow(FN_KEYS) { tab.conn.send(it) }
+        // ---- extended keys: ride above the keyboard via IME insets.
+        // Row 1 (modifiers + arrows): Esc Tab CTRL ← ↑ ↓ → ALT AltGr —
+        // CTRL/ALT/AltGr are one-shot (tap = next key only, double-tap = lock).
+        // Row 2: Enter + editing + symbols. Row 3: F1–F12.
+        val showKeyRows = if (prefs.fullscreen) {
+            keyRows > 0 && (inputFocused || imeVisible)
+        } else {
+            true
+        }
+        AnimatedVisibility(
+            visible = showKeyRows,
+            enter = expandVertically(tween(220)) + fadeIn(tween(220)),
+            exit = shrinkVertically(tween(220)) + fadeOut(tween(220)),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).imePadding()) {
+                if (keyRows >= 1) {
+                    ModNavRow(
+                        ctrlMode = ctrlMode,
+                        altMode = altMode,
+                        altGrMode = altGrMode,
+                        onCtrl = { ctrlMode = nextModMode(ctrlMode) },
+                        onAlt = { altMode = nextModMode(altMode) },
+                        onAltGr = { altGrMode = nextModMode(altGrMode) },
+                        onSend = ::sendWithMods,
+                        onSubmitReturn = ::submitReturn,
+                    )
+                }
+                if (keyRows >= 2) {
+                    KeyRow(EDIT_SYMBOL_KEYS) { seq -> if (seq == "\r") submitReturn() else sendWithMods(seq) }
+                }
+                if (keyRows >= 3) {
+                    KeyRow(FN_KEYS) { sendWithMods(it) }
+                }
             }
         }
     }
@@ -553,7 +770,10 @@ private fun TerminalTabBody(
                 TextButton(onClick = {
                     showHostKey = null
                     scope.launch {
-                        val r = tab.conn.connect(password, keyMat?.first, keyMat?.second, acceptHostKey = true)
+                        val r = tab.conn.connect(
+                            password.ifBlank { savedPw }, keyMat?.first, keyMat?.second,
+                            acceptHostKey = true,
+                        )
                         if (r.isSuccess) {
                             focusRequester.requestFocus()
                             keyboard?.show()
@@ -579,14 +799,24 @@ private fun renderScreen(
         val visible = snapshot.lines.takeLast(rows)
         visible.forEachIndexed { i, line ->
             var fg = -1
+            var bg = -1
             var bold = false
+            var reverse = false
+            var underline = false
+            var dim = false
             val sb = StringBuilder()
             fun flush() {
                 if (sb.isNotEmpty()) {
+                    val fgColor = termColor(fg.coerceIn(0, 7), true).let {
+                        if (dim) it.copy(alpha = 0.6f) else it
+                    }
+                    val bgColor = termColor(bg.coerceIn(0, 7), true)
                     pushStyle(
                         SpanStyle(
-                            color = termColor(fg, true),
+                            color = if (reverse) bgColor else fgColor,
+                            background = if (reverse) fgColor else Color.Unspecified,
                             fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+                            textDecoration = if (underline) TextDecoration.Underline else null,
                         )
                     )
                     append(sb.toString())
@@ -595,21 +825,27 @@ private fun renderScreen(
                 }
             }
             line.forEachIndexed { idx, cell ->
-                if (i == snapshot.cursorRow && idx == snapshot.cursorCol) {
+                if (snapshot.cursorVisible && i == snapshot.cursorRow && idx == snapshot.cursorCol) {
                     flush()
                     pushStyle(SpanStyle(color = primary, fontWeight = FontWeight.Bold))
                     append("\u258A")
                     pop()
                     return@forEachIndexed
                 }
-                if (cell.fg != fg || cell.bold != bold) {
+                if (cell.fg != fg || cell.bg != bg || cell.bold != bold ||
+                    cell.reverse != reverse || cell.underline != underline || cell.dim != dim
+                ) {
                     flush()
                     fg = cell.fg
+                    bg = cell.bg
                     bold = cell.bold
+                    reverse = cell.reverse
+                    underline = cell.underline
+                    dim = cell.dim
                 }
                 sb.append(cell.ch)
             }
-            if (i == snapshot.cursorRow && snapshot.cursorCol >= line.size) {
+            if (snapshot.cursorVisible && i == snapshot.cursorRow && snapshot.cursorCol >= line.size) {
                 flush()
                 pushStyle(SpanStyle(color = primary, fontWeight = FontWeight.Bold))
                 append("\u258A")
@@ -638,6 +874,59 @@ private fun KeyRow(keys: List<Pair<String, String>>, onSend: (String) -> Unit) {
     }
 }
 
+@Composable
+private fun ModNavRow(
+    ctrlMode: ModMode,
+    altMode: ModMode,
+    altGrMode: ModMode,
+    onCtrl: () -> Unit,
+    onAlt: () -> Unit,
+    onAltGr: () -> Unit,
+    onSend: (String) -> Unit,
+    onSubmitReturn: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val escTab = listOf("Esc" to ESC, "Tab" to "\u0009")
+        escTab.forEach { (label, seq) ->
+            TextButton(
+                onClick = { onSend(seq) },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+            ) {
+                Text(label, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+            }
+        }
+        ModChip(label = "Ctrl", mode = ctrlMode, onClick = onCtrl)
+        NAV_ARROWS.forEach { (label, seq) ->
+            TextButton(
+                onClick = { onSend(seq) },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+            ) {
+                Text(label, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+            }
+        }
+        ModChip(label = "Alt", mode = altMode, onClick = onAlt)
+        ModChip(label = "AltGr", mode = altGrMode, onClick = onAltGr)
+    }
+}
+
+@Composable
+private fun ModChip(label: String, mode: ModMode, onClick: () -> Unit) {
+    val text = when (mode) {
+        ModMode.OFF -> label
+        ModMode.ONE_SHOT -> "$label•"
+        ModMode.LOCKED -> "$label▪"
+    }
+    FilterChip(
+        selected = mode != ModMode.OFF,
+        onClick = onClick,
+        label = { Text(text, fontFamily = FontFamily.Monospace, fontSize = 13.sp) },
+    )
+}
+
 // NOTE: ESC is factored into the ESC constant (0x1B) so no raw control bytes
 // ever appear in source. Ctrl+X / Tab are written as explicit unicode escapes.
 internal val SYMBOL_KEYS = listOf(
@@ -651,6 +940,20 @@ internal val NAV_KEYS = listOf(
     "<-" to ESC + "[D", "Up" to ESC + "[A", "Dn" to ESC + "[B", "->" to ESC + "[C",
     "Home" to ESC + "[H", "End" to ESC + "[F", "PgUp" to ESC + "[5~", "PgDn" to ESC + "[6~",
     "Ins" to ESC + "[2~", "Del" to ESC + "[3~",
+)
+/** Row 1 arrows (subset of NAV_KEYS shown around the one-shot modifiers). */
+internal val NAV_ARROWS = listOf(
+    "<-" to ESC + "[D", "Up" to ESC + "[A", "Dn" to ESC + "[B", "->" to ESC + "[C",
+)
+/** Row 2: Enter + editing keys + symbols (Esc/Tab moved to row 1). */
+internal val EDIT_SYMBOL_KEYS = listOf(
+    "Enter" to "\r",
+    "Home" to ESC + "[H", "End" to ESC + "[F", "PgUp" to ESC + "[5~", "PgDn" to ESC + "[6~",
+    "Ins" to ESC + "[2~", "Del" to ESC + "[3~",
+    "|" to "|", "~" to "~", "-" to "-", "_" to "_",
+    "/" to "/", "\\" to "\\", ":" to ":", ";" to ";",
+    "\"" to "\"", "'" to "'", "$" to "$", "&" to "&",
+    "*" to "*", "=" to "=", "+" to "+", "!" to "!", "?" to "?", "#" to "#",
 )
 internal val FN_KEYS = listOf(
     "F1" to ESC + "OP", "F2" to ESC + "OQ", "F3" to ESC + "OR", "F4" to ESC + "OS",

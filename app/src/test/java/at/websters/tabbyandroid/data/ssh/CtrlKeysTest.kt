@@ -39,4 +39,37 @@ class CtrlKeysTest {
     @Test fun delIs127() {
         assertEquals(127, CtrlKeys.DEL.code)
     }
+
+    @Test fun withModifiersPlain() {
+        assertEquals("b", CtrlKeys.withModifiers("b", false, false))
+    }
+
+    @Test fun withModifiersCtrlLetter() {
+        val s = CtrlKeys.withModifiers("b", true, false)
+        assertEquals(1, s.length)
+        assertEquals(2, s.toByteArray(Charsets.ISO_8859_1)[0].toInt() and 0xFF)
+    }
+
+    @Test fun withModifiersAltLetter() {
+        val s = CtrlKeys.withModifiers("b", false, true)
+        assertEquals(2, s.length)
+        assertEquals(27, s[0].code)
+    }
+
+    @Test fun withModifiersCtrlArrow() {
+        assertEquals("\u001B[1;5A", CtrlKeys.withModifiers("\u001B[A", true, false))
+        assertEquals("\u001B[1;5D", CtrlKeys.withModifiers("\u001B[D", true, false))
+    }
+
+    @Test fun withModifiersAltSpecial() {
+        assertEquals("\u001B\u001B[A", CtrlKeys.withModifiers("\u001B[A", false, true))
+    }
+
+    @Test fun withModifiersCtrlPgUp() {
+        assertEquals("\u001B[5;5~", CtrlKeys.withModifiers("\u001B[5~", true, false))
+    }
+
+    @Test fun withModifiersCtrlF1() {
+        assertEquals("\u001B[1;5P", CtrlKeys.withModifiers("\u001BOP", true, false))
+    }
 }

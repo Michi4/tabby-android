@@ -61,4 +61,29 @@ class TerminalKeysTest {
         // mappings themselves are guarded in CtrlKeysTest
         assertEquals("\u001B[C", NAV_KEYS.toMap().getValue("->"))
     }
+
+    @Test fun topRowHasEssentials() {
+        // row 1: Esc Tab arrows live alongside one-shot Ctrl/Alt/AltGr chips
+        // (chips are UI-only toggles; the static seqs below must stay exact)
+        val arrows = NAV_ARROWS.toMap()
+        assertEquals("\u001B[A", arrows.getValue("Up"))
+        assertEquals("\u001B[D", arrows.getValue("<-"))
+        val edit = EDIT_SYMBOL_KEYS.toMap()
+        assertEquals("\r", edit.getValue("Enter"))
+        assertEquals("\u001B[H", edit.getValue("Home"))
+        assertEquals("|", edit.getValue("|"))
+    }
+
+    @Test fun editRowHasNoEscTabDupes() {
+        // Esc/Tab moved to row 1; row 2 must not duplicate them
+        val labels = EDIT_SYMBOL_KEYS.map { it.first }
+        assertTrue(!labels.contains("Esc"))
+        assertTrue(!labels.contains("Tab"))
+    }
+
+    @Test fun modModeCycles() {
+        assertEquals(ModMode.ONE_SHOT, nextModMode(ModMode.OFF))
+        assertEquals(ModMode.LOCKED, nextModMode(ModMode.ONE_SHOT))
+        assertEquals(ModMode.OFF, nextModMode(ModMode.LOCKED))
+    }
 }
