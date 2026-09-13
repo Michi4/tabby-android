@@ -4,10 +4,10 @@
 - **Scope:** full checkout at `a853ee5` (plus audit fixes in working tree) — Android app, sync client, SSH, storage, build/release
 - **Method:** read-only subagent audits (frontend, API-client, security-static, data-layer) with file:line evidence → independent verification by re-reading cited code, running `./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`, adb inspection of the installed debug build, git-history secret scan (filenames only), Maven Central metadata + NVD/Snyk for dependency CVEs
 - **Limitations (explicit):**
-  - The test device is PIN-locked; no live UI driving, screenshots-of-flows, or E2E were possible. UI findings are code-verified, not driven. Phase 6 journeys are static walkthroughs, labeled as such.
+  - Device smoke (2026-09-13, unlocked): demo shell DRIVEN (banner, typed `echo hi` → output `hi`), screenshot row-toggle DRIVEN both directions (window `SECURE` flag verified set/cleared via dumpsys + real screenshot captured), quick blank-host guard DRIVEN (`@` → inline error, no tab), Hosts/Terminal/Settings navigation DRIVEN without crashes.
+  - Still not drivable: real SSH handshake (no server available), biometric vault flow, tab-switch animation frames (code-verified only).
   - No staging backend exists (the app talks to each user's self-hosted Tabby Web instance). No production data was touched; nothing in this audit writes, migrates, or deletes real data.
-  - No CI history exists (no `.github` before this audit), so the new workflow's first run is unverified.
-  - SSH runtime behavior after the JSch bump is compile- + unit-test-verified only; handshake behavior needs an unlocked-device smoke test.
+  - No CI history exists, so the new workflow's first run is unverified.
 
 ## Phase 0 — Inventory
 
@@ -300,7 +300,7 @@ Checked OK: HTTPS enforcement + normalize (`TabbySyncApi.kt:39-57`); HTTP/TLS/DN
 ## Go / No-Go: **CONDITIONAL GO**
 
 Shippable as a GitHub-release APK **after** this checklist, in order:
-1. Unlock-device smoke: real SSH connect (exercises jsch 2.28.7 handshake + TOFU), demo shell, screenshot toggle row, biometric vault unlock if enrolled.
+1. ~~Unlock-device smoke: real SSH connect (exercises jsch 2.28.7 handshake + TOFU)~~ — still open (no server); demo shell, screenshot row-toggle, quick-host guard, and all three routes smoke-tested DRIVEN on 2026-09-13.
 2. First CI run on push must be green.
 3. Decide H6 (accept last-write-wins + document in README, or pursue upstream conditional update) and H7 (implement quarantine vs accept).
 4. H8: add at least one instrumented smoke (launch + open demo shell) when a harness exists.
