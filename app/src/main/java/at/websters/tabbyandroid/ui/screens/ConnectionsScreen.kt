@@ -585,10 +585,10 @@ private fun ConnectDialog(
                             }
                         }
                     }
-                    TextButton(onClick = { showKeys = true }) {
-                        Icon(Icons.Filled.Key, null)
-                        Text("Manage keys")
-                    }
+                }
+                TextButton(onClick = { showKeys = true }) {
+                    Icon(Icons.Filled.Key, null)
+                    Text("Manage keys")
                 }
                 OutlinedTextField(
                     value = password, onValueChange = { password = it },
