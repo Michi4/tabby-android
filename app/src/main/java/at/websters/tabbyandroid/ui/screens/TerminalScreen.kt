@@ -5,6 +5,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -58,14 +60,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -78,9 +89,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import at.websters.tabbyandroid.data.ssh.CtrlKeys
+import at.websters.tabbyandroid.data.ssh.SENDER_SENTINEL
 import at.websters.tabbyandroid.data.ssh.SshState
 import at.websters.tabbyandroid.data.ssh.TerminalBuffer
-import at.websters.tabbyandroid.data.ssh.diffEdit
+import at.websters.tabbyandroid.data.ssh.senderEdit
 import at.websters.tabbyandroid.ui.state.TerminalTabsViewModel
 import at.websters.tabbyandroid.ui.theme.statusColor
 import at.websters.tabbyandroid.ui.theme.termColor
@@ -89,9 +101,10 @@ import kotlinx.coroutines.launch
 internal const val ESC = "\u001B"
 
 /**
- * Termius-like terminal: browser-style tabs, tap-to-type screen (system
- * keyboard writes straight into SSH), sticky CTRL/ALT toggles, collapsible
- * extended keys, long-press line to copy. Tuned for tall 144Hz panels
+ * Termius-like terminal: browser-style tabs, read-only screen (tap it to
+ * focus the sender) plus a dedicated sender bar whose every commit goes
+ * straight into SSH exactly once, sticky CTRL/ALT toggles, collapsible
+ * extended keys, long-press to copy. Tuned for tall 144Hz panels
  * (RedMagic 10 Pro): version-gated snapshots.
  */
 @Composable
@@ -127,7 +140,7 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
                         Text(
                             listOf(active.profile.label(), status)
                             .filter { it.isNotBlank() }
-                            .joinToString(" • ") + " [" + active.conn.debugPipe() + "]",
+                            .joinToString(" • "),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -249,6 +262,13 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
     var keysOpen by remember(tab.id) { mutableStateOf(true) }
     var localEcho by remember(tab.id) { mutableStateOf(false) }
     var password by remember(tab.id) { mutableStateOf(SessionPasswords.take(tab.profile.id)) }
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    var input by remember(tab.id) {
+        mutableStateOf(TextFieldValue(SENDER_SENTINEL, TextRange(SENDER_SENTINEL.length)))
+    }
+    // post-submit IME replay guard (consumed by the next change, if any)
+    var suppressReplay by remember(tab.id) { mutableStateOf<String?>(null) }
     val scroll = rememberScrollState()
 
     val snapshot = remember(version, tab.id) { tab.conn.buffer.snapshot() }
@@ -269,6 +289,13 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
             alt -> tab.conn.send(CtrlKeys.altSeq(ch))
             else -> tab.conn.send(ch.toString())
         }
+    }
+
+    // Submit (Return): run the line, then clear the sender for the next one.
+    fun submitReturn() {
+        suppressReplay = input.text.replace(SENDER_SENTINEL, "")
+        tab.conn.send("\r")
+        input = TextFieldValue(SENDER_SENTINEL, TextRange(SENDER_SENTINEL.length))
     }
 
     Column(modifier.fillMaxSize()) {
@@ -315,70 +342,118 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
             }
         }
 
-        // ---- screen IS a text field: tapping focuses natively (framework path),
-        // typing/deleting forwards straight into SSH, selection gives native copy.
+        // ---- screen is OUTPUT ONLY (read-only, selectable); typing goes
+        // through the sender bar below, and tapping the screen focuses it.
+        // The old editable-screen design fought the IME over server echo
+        // (lost/doubled keystrokes); this split can't desync by construction:
+        // every commit is forwarded exactly once, then the field resets.
         val rows = tab.conn.buffer.rows
         val primary = MaterialTheme.colorScheme.primary
         val rendered = remember(version, tab.id, primary) { renderScreen(snapshot, rows, primary) }
-        var field by remember(tab.id) { mutableStateOf(TextFieldValue("")) }
-        // last server text we have shown; used to reconcile without yanking
-        // freshly typed text out from under the keyboard (that desyncs IMEs)
-        var shownServerText by remember(tab.id) { mutableStateOf("") }
-        // show live server output - but only when the user hasn't typed ahead
-        // of it (their keystrokes were already forwarded at press time and the
-        // echo will catch the screen up; yanking causes lost/double input)
-        LaunchedEffect(rendered) {
-            if (field.text == shownServerText) {
-                field = TextFieldValue(rendered, TextRange(rendered.length))
-            }
-            shownServerText = rendered.text
-        }
         Column(
             Modifier.weight(1f).fillMaxWidth()
                 .background(Color.Black)
                 .padding(8.dp)
-                .verticalScroll(scroll),
+                .verticalScroll(scroll)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { focusRequester.requestFocus() },
+                ),
         ) {
+            SelectionContainer {
+                Text(
+                    text = rendered,
+                    modifier = Modifier.fillMaxWidth(),
+                    style = TextStyle(
+                        color = Color.White,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = fontSize.sp,
+                        lineHeight = (fontSize + 5).sp,
+                    ),
+                )
+            }
+        }
+        // ---- sender bar: accumulates the line (Gboard owns the text, we only
+        // diff-forward, so the IME can never desync); server echo stays in the
+        // output view and never enters the field. A zero-width sentinel keeps
+        // soft-keyboard backspace observable on the empty field; hardware
+        // ENTER/DEL arrive via onKeyEvent (singleLine eats \n). Submit clears.
         BasicTextField(
-            value = field,
+            value = input,
             onValueChange = { nv ->
-                if (nv.text != field.text) {
-                    val (del, added) = diffEdit(field.text, nv.text)
-                    repeat(del) { tab.conn.send(CtrlKeys.byteString(127.toByte())) }
-                    for (ch in added) sendTermChar(ch)
-                    // local echo (off by default): show keystrokes instantly without
-                    // waiting for server round-trip; also makes input observable in tests
-                    if (localEcho && added.isNotEmpty()) {
-                        tab.conn.buffer.feed(added.toByteArray())
+                val clean = nv.text.replace(SENDER_SENTINEL, "")
+                // swallow the single post-submit replay some IMEs emit after
+                // an app-driven clear (would otherwise resend the line)
+                if (suppressReplay != null) {
+                    val replay = suppressReplay
+                    suppressReplay = null
+                    if (clean == replay) {
+                        input = TextFieldValue(SENDER_SENTINEL, TextRange(SENDER_SENTINEL.length))
+                        return@BasicTextField
                     }
                 }
-                // always keep what the keyboard committed: resetting here would
-                // desync Gboard's text model and eat keystrokes
-                field = nv
+                val edit = senderEdit(input.text, nv.text)
+                if (edit.sendText.isEmpty() && edit.deletions == 0) {
+                    input = nv // cursor/selection move only — preserve it
+                } else {
+                    repeat(edit.deletions) { tab.conn.send(CtrlKeys.byteString(127.toByte())) }
+                    for (ch in edit.sendText) sendTermChar(ch)
+                    // local echo (off by default): show keystrokes instantly
+                    if (localEcho && edit.sendText.isNotEmpty()) {
+                        tab.conn.buffer.feed(edit.sendText.toByteArray())
+                    }
+                    input = nv
+                }
             },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth()
+                .background(Color.Black)
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+                .focusRequester(focusRequester)
+                .onKeyEvent {
+                    if (it.type != KeyEventType.KeyDown) return@onKeyEvent false
+                    when (it.key) {
+                        Key.Enter, Key.NumPadEnter -> { submitReturn(); true }
+                        // soft keyboards delete via InputConnection (handled above);
+                        // a hardware DEL on the sentinel-only field must send DEL
+                        // manually (consuming also keeps the sentinel intact).
+                        Key.Backspace -> if (input.text == SENDER_SENTINEL) {
+                            tab.conn.send(CtrlKeys.byteString(127.toByte())); true
+                        } else false
+                        else -> false
+                    }
+                },
             textStyle = TextStyle(
                 color = Color.White,
                 fontFamily = FontFamily.Monospace,
                 fontSize = fontSize.sp,
                 lineHeight = (fontSize + 5).sp,
             ),
-            cursorBrush = SolidColor(Color.Transparent), // our own block cursor is rendered
+            cursorBrush = SolidColor(Color.White),
+            singleLine = true,
+            // Password type (with visible text): the only reliable way to get
+            // zero suggestions/autocorrect/gesture — a terminal must send
+            // exactly what the user typed ("row-ok", never "Rowling").
+            visualTransformation = VisualTransformation.None,
             keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Password,
-                imeAction = ImeAction.None,
+                capitalization = KeyboardCapitalization.None,
                 autoCorrect = false,
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.Done,
             ),
-            keyboardActions = KeyboardActions(
-                // some keyboards send an IME action instead of a newline (esp. on
-                // password fields): every action key means "run the line"
-                onDone = { tab.conn.send("\r") },
-                onGo = { tab.conn.send("\r") },
-                onSearch = { tab.conn.send("\r") },
-                onSend = { tab.conn.send("\r") },
-            ),
+            keyboardActions = KeyboardActions(onDone = { submitReturn() }),
+            decorationBox = { inner ->
+                if (input.text == SENDER_SENTINEL) {
+                    Text(
+                        "› type here — tap screen to focus",
+                        color = Color.Gray,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = fontSize.sp,
+                    )
+                }
+                inner()
+            },
         )
-        }
 
         if (state == SshState.ERROR) {
             Text(
@@ -415,6 +490,10 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
                         val r = tab.conn.connect(password, keyMat?.first, keyMat?.second)
                         if (r.isFailure && r.exceptionOrNull() is at.websters.tabbyandroid.data.ssh.UnknownHostKeyException) {
                             showHostKey = tab.conn.pendingHostKey
+                        } else if (r.isSuccess) {
+                            // ready to type: focus the sender, pop the keyboard
+                            focusRequester.requestFocus()
+                            keyboard?.show()
                         }
                     }
                 }) { Text(if (state == SshState.CONNECTING) "…" else "Connect") }
@@ -422,7 +501,8 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
         }
 
         // ---- extended keyboard: symbols + arrows always visible, rest expands ----
-        KeyRow(SYMBOL_KEYS) { tab.conn.send(it) }
+        // the Enter key submits (sends CR + clears the sender like a real Return)
+        KeyRow(SYMBOL_KEYS) { seq -> if (seq == "\r") submitReturn() else tab.conn.send(seq) }
         KeyRow(NAV_KEYS) { tab.conn.send(it) }
         AnimatedVisibility(visible = keysOpen) {
             Column {
