@@ -27,7 +27,8 @@ class SyncRepository(
     suspend fun listRemoteConfigs(account: SyncAccount): List<RemoteConfigMeta> = withContext(Dispatchers.IO) {
         val token = secrets.getAccountToken(account.id)
         require(token.isNotBlank()) { "Missing sync token for '${account.name}'" }
-        listRemoteConfigs(account.normalizedHost(), token)
+        // normalizeHost (not a plain trim): enforces https:// like every path
+        listRemoteConfigs(TabbySyncApiFactory.normalizeHost(account.hostUrl), token)
     }
 
     /** Host+token variant used by the add-server dialog (persists nothing). */

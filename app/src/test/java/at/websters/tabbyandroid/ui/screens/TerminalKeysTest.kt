@@ -18,7 +18,7 @@ class TerminalKeysTest {
     }
 
     @Test fun noRawControlBytesInLabels() {
-        val all = SYMBOL_KEYS + NAV_KEYS + FN_KEYS
+        val all = TOP_ROW_KEYS + NAV_ARROWS + EDIT_SYMBOL_KEYS + FN_KEYS
         assertTrue(all.isNotEmpty())
         for ((label, _) in all) {
             for (b in bytes(label)) {
@@ -28,21 +28,22 @@ class TerminalKeysTest {
     }
 
     @Test fun noRedundantComboRows() {
-        // combos live in the CTRL/ALT toggles + keyboard; key rows stay clean
-        val all = SYMBOL_KEYS + NAV_KEYS + FN_KEYS
+        // combos live in the one-shot Ctrl/Alt/AltGr chips + keyboard; key rows stay clean
+        val all = TOP_ROW_KEYS + NAV_ARROWS + EDIT_SYMBOL_KEYS + FN_KEYS
         assertTrue(all.none { (label, _) -> label.startsWith("Ctrl+") })
     }
 
     @Test fun symbolKeys() {
-        val m = SYMBOL_KEYS.toMap()
-        assertEquals(listOf(0x1B), bytes(m.getValue("Esc")))
-        assertEquals(listOf(0x09), bytes(m.getValue("Tab")))
+        val top = TOP_ROW_KEYS.toMap()
+        assertEquals(listOf(0x1B), bytes(top.getValue("Esc")))
+        assertEquals(listOf(0x09), bytes(top.getValue("Tab")))
+        val m = EDIT_SYMBOL_KEYS.toMap()
         assertEquals(listOf('|'.code), bytes(m.getValue("|")))
         assertEquals(listOf('\\'.code), bytes(m.getValue("\\")))
     }
 
     @Test fun navKeysAreCsiSequences() {
-        val m = NAV_KEYS.toMap()
+        val m = NAV_ARROWS.toMap() + EDIT_SYMBOL_KEYS.toMap()
         assertEquals("\u001B[A", m.getValue("Up"))
         assertEquals("\u001B[D", m.getValue("<-"))
         assertEquals("\u001B[5~", m.getValue("PgUp"))
@@ -57,9 +58,9 @@ class TerminalKeysTest {
     }
 
     @Test fun togglePathBytes() {
-        // CTRL/ALT toggles + keyboard replace the old combo rows; the byte
+        // one-shot modifiers + keyboard replace the old combo rows; the byte
         // mappings themselves are guarded in CtrlKeysTest
-        assertEquals("\u001B[C", NAV_KEYS.toMap().getValue("->"))
+        assertEquals("\u001B[C", NAV_ARROWS.toMap().getValue("->"))
     }
 
     @Test fun topRowHasEssentials() {

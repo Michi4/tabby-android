@@ -79,4 +79,10 @@ class SyncApiTest {
         assertEquals("Bearer tok", recorded.getHeader("Authorization"))
         assertEquals("/api/1/configs", recorded.path)
     }
+
+    @Test fun updateBodyToStringRedactsContent() {
+        val body = UpdateConfigBody(content = "profiles: [SECRET-HOST]", lastUsedWithVersion = "1.2.3")
+        assertFalse(body.toString().contains("SECRET-HOST"))
+        assertTrue(body.toString().contains("1.2.3"))
+    }
 }

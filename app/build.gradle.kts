@@ -62,6 +62,9 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // jsch 2.x is a multi-release/OSGi jar; Android uses neither,
+            // and the manifest collides with another dependency's copy
+            excludes += "/META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }
     }
 }
@@ -90,7 +93,7 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
     // Encrypted token storage (best practice for sync tokens + key passphrases)
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.security:security-crypto:1.1.0")
 
     // Networking - Tabby sync API
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
@@ -104,7 +107,7 @@ dependencies {
     implementation("org.yaml:snakeyaml:2.3")
 
     // SSH - maintained JSch fork (BSD-style license, password + publickey + keyboard-interactive + Ed25519)
-    implementation("com.github.mwiede:jsch:0.2.21")
+    implementation("com.github.mwiede:jsch:2.28.7")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

@@ -1,11 +1,13 @@
 package at.websters.tabbyandroid.data.local
 
 import android.content.Context
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import at.websters.tabbyandroid.data.model.Pin
 import at.websters.tabbyandroid.data.model.SshProfile
 import at.websters.tabbyandroid.data.model.SyncAccount
 import kotlinx.coroutines.flow.Flow
@@ -154,6 +156,65 @@ class ProfileRepository(private val appContext: Context) {
         }
     }
 
+    /**
+     * Atomically removes a synced profile AND records its tombstone AND drops
+     * dangling pin/open-tab refs — a single DataStore edit, so a crash can
+     * neither resurrect the host without its tombstone nor keep the tombstone
+     * without the delete.
+     */
+    suspend fun deleteCachedProfile(profileId: String, accountId: String?) {
+        appContext.tabbyStore.edit { prefs ->
+            val cached = prefs[KEY_CACHED]?.let { raw ->
+                runCatching { json.decodeFromString(ListSerializer(SshProfile.serializer()), raw) }.getOrDefault(emptyList())
+            } ?: emptyList()
+            prefs[KEY_CACHED] = json.encodeToString(
+                ListSerializer(SshProfile.serializer()),
+                cached.filterNot { it.id == profileId },
+            )
+            if (accountId != null) {
+                val stones = prefs[KEY_TOMBSTONES]?.let { raw ->
+                    runCatching {
+                        json.decodeFromString(MapSerializer(String.serializer(), ListSerializer(String.serializer())), raw)
+                    }.getOrDefault(emptyMap())
+                } ?: emptyMap()
+                val mut = stones.toMutableMap()
+                mut[accountId] = (mut[accountId].orEmpty() + profileId).distinct()
+                prefs[KEY_TOMBSTONES] = json.encodeToString(
+                    MapSerializer(String.serializer(), ListSerializer(String.serializer())), mut
+                )
+            }
+            prefs.purgeProfileRefs(setOf(profileId))
+        }
+    }
+
+    /**
+     * Drops pin + open-tab refs for ids (call after a manual delete, which
+     * has no tombstone). Shares one edit with the caller's own save.
+     */
+    suspend fun purgeProfileRefs(profileIds: Set<String>) {
+        if (profileIds.isEmpty()) return
+        appContext.tabbyStore.edit { prefs -> prefs.purgeProfileRefs(profileIds) }
+    }
+
+    private fun MutablePreferences.purgeProfileRefs(profileIds: Set<String>) {
+        val pins = this[KEY_PINS]?.let { raw ->
+            runCatching {
+                json.decodeFromString(ListSerializer(Pin.serializer()), raw)
+            }.getOrDefault(emptyList())
+        } ?: emptyList()
+        this[KEY_PINS] = json.encodeToString(
+            ListSerializer(Pin.serializer()),
+            pins.filterNot { it.kind == Pin.HOST && it.ref in profileIds },
+        )
+        val tabs = this[KEY_OPEN_TABS]?.let { raw ->
+            runCatching { json.decodeFromString(ListSerializer(SshProfile.serializer()), raw) }.getOrDefault(emptyList())
+        } ?: emptyList()
+        this[KEY_OPEN_TABS] = json.encodeToString(
+            ListSerializer(SshProfile.serializer()),
+            tabs.filterNot { it.id in profileIds },
+        )
+    }
+
     suspend fun saveManual(profiles: List<SshProfile>) {
         appContext.tabbyStore.edit {
             it[KEY_MANUAL] = json.encodeToString(ListSerializer(SshProfile.serializer()), profiles)
@@ -259,6 +320,16 @@ class ProfileRepository(private val appContext: Context) {
 
     suspend fun currentVaultLockModes(): Map<String, String> = vaultLockModes.first()
 
+    /** Drops a custom lock mode (falls back to ask-every-time). Used on forget/delete. */
+    suspend fun clearVaultLockMode(accountId: String) {
+        val all = vaultLockModes.first().toMutableMap()
+        if (all.remove(accountId) != null) {
+            appContext.tabbyStore.edit {
+                it[KEY_VAULT_LOCK] = json.encodeToString(MapSerializer(String.serializer(), String.serializer()), all)
+            }
+        }
+    }
+
     /** Keystore-guarded vault blobs per account (ciphertext only, safe anywhere). */
     val vaultSealed: Flow<Map<String, String>> = appContext.tabbyStore.data.map {
         it[KEY_VAULT_SEALED]?.let { raw ->
@@ -321,6 +392,12 @@ class ProfileRepository(private val appContext: Context) {
         val kept = all[accountId].orEmpty().filter { it !in ids }
         if (kept.isEmpty()) all.remove(accountId) else all[accountId] = kept
         saveTombstones(all)
+    }
+
+    /** Drops every tombstone for an account (used on account delete). */
+    suspend fun clearAllTombstones(accountId: String) {
+        val all = currentTombstones().toMutableMap()
+        if (all.remove(accountId) != null) saveTombstones(all)
     }
 
     suspend fun currentAccounts(): List<SyncAccount> = accounts.first()

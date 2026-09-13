@@ -11,9 +11,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -94,6 +97,14 @@ fun KeysDialog(keysVm: SshKeysViewModel, onDismiss: () -> Unit) {
                     value = passphrase, onValueChange = { passphrase = it },
                     label = { Text("Key passphrase (if any)") }, singleLine = true,
                     visualTransformation = if (pwVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { pwVisible = !pwVisible }) {
+                            Icon(
+                                if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                if (pwVisible) "Hide passphrase" else "Show passphrase",
+                            )
+                        }
+                    },
                 )
                 if (error != null) {
                     Text(error!!, color = MaterialTheme.colorScheme.error)
@@ -111,6 +122,12 @@ fun KeysDialog(keysVm: SshKeysViewModel, onDismiss: () -> Unit) {
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.padding(vertical = 12.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    }
                     Button(
                         onClick = {
                             scope.launch {
@@ -144,6 +161,5 @@ fun KeysDialog(keysVm: SshKeysViewModel, onDismiss: () -> Unit) {
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
-        dismissButton = {},
     )
 }

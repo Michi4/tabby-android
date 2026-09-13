@@ -53,6 +53,22 @@ class VaultSyncTest {
         assertTrue((r as VaultSync.PullResolution.Failed).message.contains("Incorrect"))
     }
 
+    @Test fun corruptVaultEnvelopeFailsCleanly() {
+        val (yaml, pw, _) = vaultYaml()
+        val broken = yaml.replace("keySalt:", "keySalt: zz")
+        val r = VaultSync.resolvePull(broken, "o", pw)
+        assertTrue(r is VaultSync.PullResolution.Failed)
+        // no raw parser text may leak into the message
+        assertFalse((r as VaultSync.PullResolution.Failed).message.contains("zz"))
+    }
+
+    @Test fun corruptVaultUploadFailsCleanly() {
+        val (yaml, pw, _) = vaultYaml()
+        val broken = yaml.replace("keySalt:", "keySalt: zz")
+        val r = VaultSync.buildUpload(broken, emptyList(), emptySet(), pw)
+        assertTrue(r is VaultSync.PushResolution.Failed)
+    }
+
     @Test fun pushRoundTripIntoVault() {
         val (yaml, pw, _) = vaultYaml()
         val extra = SshProfile(

@@ -58,6 +58,11 @@ class SecureTokenStorage(appContext: Context) {
     fun getSshPassword(profileId: String): String =
         prefs.getString("ssh_pw_$profileId", "").orEmpty()
 
+    /** Removes a saved password (call on profile delete — no orphan secrets). */
+    fun removeSshPassword(profileId: String) {
+        prefs.edit().remove("ssh_pw_$profileId").apply()
+    }
+
     /** Private key PEM + optional passphrase, encrypted at rest. */
     fun putSshKey(keyId: String, pem: String, passphrase: String) {
         prefs.edit()
@@ -82,10 +87,10 @@ class SecureTokenStorage(appContext: Context) {
      * connect (TOFU). This is the only store that matters — an earlier
      * revision kept a parallel JSON record that nothing enforced.
      */
-    fun clearHostKeys() {
-        runCatching {
-            java.io.File(app.filesDir, KNOWN_HOSTS_NAME).takeIf { it.exists() }?.delete()
-        }
+    fun clearHostKeys(): Boolean {
+        return runCatching {
+            java.io.File(app.filesDir, KNOWN_HOSTS_NAME).takeIf { it.exists() }?.delete() ?: true
+        }.getOrDefault(false)
     }
 
     /** Vault passphrase, only when the user opts into remembering it. */
@@ -99,4 +104,9 @@ class SecureTokenStorage(appContext: Context) {
 
     fun getVaultPassphrase(accountId: String): String =
         prefs.getString("vault_pw_$accountId", "").orEmpty()
+
+    /** Removes a remembered vault passphrase (call on account delete). */
+    fun removeVaultPassphrase(accountId: String) {
+        prefs.edit().remove("vault_pw_$accountId").apply()
+    }
 }

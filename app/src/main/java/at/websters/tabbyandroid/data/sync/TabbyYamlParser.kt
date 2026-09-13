@@ -1,7 +1,9 @@
 package at.websters.tabbyandroid.data.sync
 
 import at.websters.tabbyandroid.data.model.SshProfile
+import org.yaml.snakeyaml.LoaderOptions
 import org.yaml.snakeyaml.Yaml
+import org.yaml.snakeyaml.constructor.SafeConstructor
 
 /**
  * Parses Tabby `config.yaml` content (as stored in `api/1/configs/{id}.content`)
@@ -25,12 +27,21 @@ import org.yaml.snakeyaml.Yaml
  */
 object TabbyYamlParser {
 
+    /**
+     * Explicit SafeConstructor (never the default resolving constructor):
+     * remote config YAML is untrusted input — global `!!java/object` tags
+     * must never instantiate classes (CVE-2022-1471 class). SnakeYAML 2.x
+     * happens to default to safe, but this pins the guarantee in code so a
+     * future downgrade can't silently re-enable object construction.
+     */
+    private fun safeYaml(): Yaml = Yaml(SafeConstructor(LoaderOptions()))
+
     fun parseSshProfiles(yamlContent: String, originPrefix: String): List<SshProfile> {
         if (yamlContent.isBlank() || yamlContent.trim() == "{}") return emptyList()
         // NOTE: explicit <Any> - SnakeYAML's generic <T> T load(String) otherwise
         // infers Void from the try-expression and crashes with ClassCastException.
         val loaded: Any? = try {
-            Yaml().load<Any>(yamlContent)
+            safeYaml().load<Any>(yamlContent)
         } catch (_: Exception) {
             return emptyList()
         }
@@ -48,7 +59,7 @@ object TabbyYamlParser {
     /** Loads remote config content (YAML) into a plain map, or null when blank/invalid. */
     fun loadContentMap(yamlContent: String): MutableMap<String, Any?>? {
         if (yamlContent.isBlank() || yamlContent.trim() == "{}") return null
-        val loaded = runCatching { Yaml().load<Any>(yamlContent) }.getOrNull()
+        val loaded = runCatching { safeYaml().load<Any>(yamlContent) }.getOrNull()
         @Suppress("UNCHECKED_CAST")
         return (loaded as? Map<*, *>)
             ?.entries
@@ -79,7 +90,7 @@ object TabbyYamlParser {
     /** Folder structures straight from a config's YAML content. */
     fun parseGroupsFullYaml(yamlContent: String): List<at.websters.tabbyandroid.data.model.TabbyGroup> {
         if (yamlContent.isBlank() || yamlContent.trim() == "{}") return emptyList()
-        val loaded = runCatching { Yaml().load<Any>(yamlContent) }.getOrNull()
+        val loaded = runCatching { safeYaml().load<Any>(yamlContent) }.getOrNull()
         return if (loaded is Map<*, *>) parseGroupsFull(loaded) else emptyList()
     }
 

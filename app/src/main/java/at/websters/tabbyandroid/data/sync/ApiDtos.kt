@@ -14,16 +14,13 @@ data class ApiConfig(
     val user: Long? = null,
 )
 
-@Serializable
-data class ApiUser(
-    val id: Long,
-    val username: String,
-    @SerialName("active_config") val activeConfig: Long? = null,
-)
-
 /** Body for PATCH /api/1/configs/{id} - same as Tabby desktop's updateConfig. */
 @Serializable
 data class UpdateConfigBody(
     val content: String,
     @SerialName("last_used_with_version") val lastUsedWithVersion: String,
-)
+) {
+    // Full config YAML (may embed secrets) — never log verbatim.
+    override fun toString(): String =
+        "UpdateConfigBody(content=<redacted ${content.length} chars>, lastUsedWithVersion=$lastUsedWithVersion)"
+}

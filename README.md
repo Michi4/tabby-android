@@ -94,7 +94,7 @@ Never commit real tokens. The app never logs tokens/passwords/keys.
 ./gradlew :app:lintDebug
 ```
 
-120 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
+128 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
 folder-tree (nesting, orphans, cycles), terminal buffer (incl. alt-screen,
 margins, erase/insert/delete, DSR, split UTF-8) + key bytes + one-shot
 modifier mappings + demo-shell line discipline, SSH key generation, sync API

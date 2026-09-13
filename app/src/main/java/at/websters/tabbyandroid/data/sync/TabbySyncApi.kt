@@ -19,9 +19,6 @@ interface TabbySyncService {
     @GET("api/1/configs/{id}")
     suspend fun getConfig(@Path("id") id: Long): ApiConfig
 
-    @GET("api/1/user")
-    suspend fun getUser(): ApiUser
-
     /**
      * Same call Tabby desktop's ConfigSyncService.updateConfig makes.
      * Supported by tabby-web and the rtabby-web-api drop-in.
@@ -91,6 +88,9 @@ object TabbySyncApiFactory {
             .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
             .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            // overall call deadline: bounds slow-trickle responses that would
+            // otherwise hold a sync indefinitely on 30s-per-read timeouts
+            .callTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
         if (at.websters.tabbyandroid.BuildConfig.DEBUG) {
             builder.addInterceptor(logging)
         }

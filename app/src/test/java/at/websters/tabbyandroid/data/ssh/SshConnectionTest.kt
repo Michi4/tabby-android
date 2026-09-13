@@ -46,6 +46,15 @@ class SshConnectionTest {
         assertTrue(msg.contains("Forget saved host keys"))
     }
 
+    @Test fun replacePinSwapsStaleEntry() {
+        val out = replacePin(
+            listOf("a.example ssh-rsa AAA", "b.example ssh-rsa BBB"),
+            "b.example ",
+            "b.example ssh-ed25519 CCC",
+        )
+        assertEquals(listOf("a.example ssh-rsa AAA", "b.example ssh-ed25519 CCC"), out)
+    }
+
     @Test fun sha256FingerprintVector() {
         // base64("abc") = "YWJj"; must match `echo -n abc | sha256sum` rendering
         assertEquals(

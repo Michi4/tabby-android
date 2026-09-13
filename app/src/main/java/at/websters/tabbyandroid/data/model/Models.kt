@@ -17,9 +17,7 @@ data class SyncAccount(
     val selectedConfigName: String? = null,
     val lastSyncAtEpochMs: Long? = null,
     val lastError: String? = null,
-) {
-    fun normalizedHost(): String = hostUrl.trim().trimEnd('/')
-}
+)
 
 @Serializable
 data class RemoteConfigMeta(

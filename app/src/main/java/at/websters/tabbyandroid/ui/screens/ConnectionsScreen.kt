@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Refresh
@@ -370,7 +371,10 @@ fun ConnectionsScreen(
                         visualTransformation = if (pwVisible) VisualTransformation.None else PasswordVisualTransformation(),
                         trailingIcon = {
                             IconButton(onClick = { pwVisible = !pwVisible }) {
-                                Icon(if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Show password")
+                                Icon(
+                                    if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                    if (pwVisible) "Hide password" else "Show password",
+                                )
                             }
                         },
                     )
@@ -540,6 +544,10 @@ private fun HostCard(
                     Icon(Icons.Filled.KeyboardArrowDown, "Move down")
                 }
             }
+            // Same sheet as long-press: keyboard/D-pad users can't long-press.
+            IconButton(onClick = onLongPress, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Filled.MoreVert, "Host actions (pin, edit, delete)")
+            }
             IconButton(onClick = onConnect) {
                 Icon(Icons.Filled.PlayArrow, "Connect", tint = MaterialTheme.colorScheme.primary)
             }
@@ -572,8 +580,7 @@ private fun HostActionsDialog(
                 }
             }
         },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
@@ -733,7 +740,10 @@ private fun ConnectDialog(
                     visualTransformation = if (pwVisible) VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
                         IconButton(onClick = { pwVisible = !pwVisible }) {
-                            Icon(if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Show password")
+                            Icon(
+                                if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                if (pwVisible) "Hide password" else "Show password",
+                            )
                         }
                     },
                 )

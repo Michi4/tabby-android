@@ -197,7 +197,8 @@ class SshConnection(
     /**
      * Saves the accepted key to known_hosts (OpenSSH format), replacing any
      * previous pin for this host (changed-key accept must not leave the stale
-     * line behind — JSch would keep rejecting).
+     * line behind — JSch would keep rejecting). Written via temp-file + rename
+     * so a crash can never leave a truncated known_hosts behind.
      */
     private fun savePendingKey(): Boolean {
         val hk = pendingKey ?: return false
@@ -209,7 +210,14 @@ class SshConnection(
                 f.readLines().filterNot { it.startsWith(prefix) }
             } else emptyList()
             // HostKey.key is already base64 in JSch - store verbatim (OpenSSH line format)
-            f.writeText((kept + "${hostPart()} ${hk.type} ${hk.key}").joinToString("\n") + "\n")
+            val lines = replacePin(kept, prefix, "${hostPart()} ${hk.type} ${hk.key}")
+            val tmp = java.io.File(f.parentFile, "${f.name}.tmp")
+            tmp.writeText(lines.joinToString("\n") + "\n")
+            if (!tmp.renameTo(f)) {
+                // rename across volumes can fail: fall back to direct write
+                f.writeText(lines.joinToString("\n") + "\n")
+            }
+            tmp.takeIf { it.exists() }?.delete()
             pendingKey = null
             pendingHostKeyChanged = false
             true
@@ -264,6 +272,14 @@ fun formatHostKey(host: String, port: Int, hk: HostKey?): String? {
     if (hk == null) return null
     return "Host key for $host:$port\nType: ${hk.type}\nFingerprint: ${sha256Fingerprint(hk.key)}"
 }
+
+/**
+ * Returns known_hosts lines with any stale pin for [prefix] replaced by
+ * [entry] (pure, unit-tested). Keeping this logic out of the file write
+ * means the on-disk update is a single dumb dump of the result.
+ */
+internal fun replacePin(kept: List<String>, prefix: String, entry: String): List<String> =
+    kept.filterNot { it.startsWith(prefix) } + entry
 
 /** Short, actionable SSH errors instead of raw stack text. */
 fun SshConnection.friendlyError(e: Exception): String {

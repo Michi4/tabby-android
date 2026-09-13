@@ -38,6 +38,9 @@ object VaultSync {
             PullResolution.Failed("Incorrect vault passphrase")
         } catch (e: VaultFormatException) {
             PullResolution.Failed(e.message ?: "Invalid vault")
+        } catch (e: IllegalArgumentException) {
+            // belt-and-braces: no raw parser message may reach the UI
+            PullResolution.Failed("Invalid vault")
         }
     }
 
@@ -79,6 +82,9 @@ object VaultSync {
             PushResolution.Failed("Incorrect vault passphrase")
         } catch (e: VaultFormatException) {
             PushResolution.Failed(e.message ?: "Invalid vault")
+        } catch (e: IllegalArgumentException) {
+            // belt-and-braces: no raw parser message may reach the UI
+            PushResolution.Failed("Invalid vault")
         }
     }
 }

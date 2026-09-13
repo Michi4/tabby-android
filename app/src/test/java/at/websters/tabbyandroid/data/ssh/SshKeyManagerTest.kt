@@ -33,4 +33,10 @@ class SshKeyManagerTest {
         assertTrue(SshKeyManager.looksLikePem("-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----"))
         assertTrue(!SshKeyManager.looksLikePem("hello"))
     }
+
+    @Test fun generatedKeyToStringHidesPrivatePem() {
+        val g = SshKeyManager.generateKey("test")
+        assertFalse(g.toString().contains("PRIVATE KEY"))
+        assertFalse(g.toString().contains(g.privatePem.lines().getOrNull(1).orEmpty()))
+    }
 }

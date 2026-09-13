@@ -69,12 +69,18 @@ class ConnectionsViewModel(app: Application) : AndroidViewModel(app) {
     suspend fun deleteProfile(profile: SshProfile) {
         if (profile.origin == "manual") {
             repo.saveManual(repo.manualProfiles.first().filterNot { it.id == profile.id })
+            repo.purgeProfileRefs(setOf(profile.id))
         } else {
-            repo.saveCached(repo.cachedProfiles.first().filterNot { it.id == profile.id })
-            // Remember so the next Upload also removes it server-side.
-            TabbyYamlSerializer.accountIdFromOrigin(profile.origin)
-                ?.let { repo.addTombstone(it, profile.id) }
+            // Single-edit delete + tombstone + ref purge: crash-safe, no resurrection.
+            repo.deleteCachedProfile(
+                profile.id,
+                TabbyYamlSerializer.accountIdFromOrigin(profile.origin),
+            )
         }
+        // No orphan secrets or session state for a deleted host.
+        secrets.removeSshPassword(profile.id)
+        at.websters.tabbyandroid.ui.screens.SessionPasswords.take(profile.id)
+        at.websters.tabbyandroid.ui.screens.SessionKeys.take(profile.id)
     }
 
     fun getPassword(profileId: String): String = secrets.getSshPassword(profileId)
@@ -198,6 +204,9 @@ class ConnectionsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             secrets.putVaultPassphrase(account.id, "")
             repo.saveVaultSealed(account.id, null)
+            // back to ask-every-time: a stale forever/guarded mode with no
+            // secret would otherwise fail every auto-read as locked
+            repo.clearVaultLockMode(account.id)
             _msg.value = "Vault passphrase forgotten for '${account.name}'"
         }
     }
@@ -408,13 +417,25 @@ class SyncAccountsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteAccount(account: SyncAccount) {
         viewModelScope.launch {
+            // drop cached profiles from this account (collect ids first for secret purge)
+            val removedIds = repo.cachedProfiles.first()
+                .filter { it.origin.startsWith("tabby:${account.id}:") }
+                .map { it.id }
+                .toSet()
             repo.saveAccounts(repo.accounts.first().filterNot { it.id == account.id })
             secrets.removeAccountToken(account.id)
-            // drop cached profiles from this account
+            secrets.removeVaultPassphrase(account.id)
+            removedIds.forEach { secrets.removeSshPassword(it) }
             repo.saveCached(
                 repo.cachedProfiles.first()
-                    .filterNot { it.origin.startsWith("tabby:${account.id}:") }
+                    .filterNot { it.id in removedIds }
             )
+            repo.saveVaultSealed(account.id, null)
+            repo.clearVaultLockMode(account.id)
+            repo.clearAllTombstones(account.id)
+            repo.purgeProfileRefs(removedIds)
+            at.websters.tabbyandroid.data.sync.VaultPassphrases.clear(account.id)
+            at.websters.tabbyandroid.data.sync.VaultLocks.clear(account.id)
         }
     }
 
@@ -499,8 +520,11 @@ class SyncAccountsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun forgetHostKeys() {
         viewModelScope.launch {
-            at.websters.tabbyandroid.data.local.SecureTokenStorage(getApplication()).clearHostKeys()
-            _msg.value = "Saved host keys forgotten — servers will ask to verify again"
+            if (at.websters.tabbyandroid.data.local.SecureTokenStorage(getApplication()).clearHostKeys()) {
+                _msg.value = "Saved host keys forgotten — servers will ask to verify again"
+            } else {
+                _msg.value = "Could not delete saved host keys — try again"
+            }
         }
     }
 }

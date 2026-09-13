@@ -57,6 +57,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -82,6 +83,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
@@ -123,6 +126,7 @@ import at.websters.tabbyandroid.ui.state.ConnectionsViewModel
 import at.websters.tabbyandroid.ui.state.SshKeysViewModel
 import at.websters.tabbyandroid.ui.state.TerminalTabsViewModel
 import at.websters.tabbyandroid.ui.theme.statusColor
+import at.websters.tabbyandroid.ui.theme.statusLabel
 import at.websters.tabbyandroid.ui.theme.termColor
 import kotlinx.coroutines.launch
 
@@ -221,14 +225,6 @@ fun TerminalScreen(
                     .padding(horizontal = 8.dp, vertical = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                if (tabs.isEmpty()) {
-                    Text(
-                        "No tabs — open a host from Hosts or tap +",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(8.dp),
-                    )
-                }
                 tabs.forEach { t ->
                     val st by t.conn.state.collectAsState()
                     val selected = t.id == activeId
@@ -243,7 +239,14 @@ fun TerminalScreen(
                             .padding(start = 10.dp, end = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("●", color = statusColor(st), fontSize = 10.sp)
+                        Text(
+                            "●",
+                            color = statusColor(st),
+                            fontSize = 10.sp,
+                            modifier = Modifier.clearAndSetSemantics {
+                                contentDescription = statusLabel(st)
+                            },
+                        )
                         Text(
                             t.profile.name,
                             maxLines = 1,
@@ -305,14 +308,18 @@ fun TerminalScreen(
 
     if (showQuick) {
         var quick by remember { mutableStateOf("") }
+        var quickError by remember { mutableStateOf<String?>(null) }
         AlertDialog(
             onDismissRequest = { showQuick = false },
             title = { Text("Quick connect") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
-                        value = quick, onValueChange = { quick = it },
+                        value = quick,
+                        onValueChange = { quick = it; quickError = null },
                         label = { Text("user@host:port") }, singleLine = true,
+                        isError = quickError != null,
+                        supportingText = { if (quickError != null) Text(quickError!!) },
                     )
                     OutlinedButton(
                         onClick = {
@@ -326,7 +333,11 @@ fun TerminalScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (quick.isNotBlank()) {
+                        // validate before opening: no blank-host tab that can
+                        // only fail later as a DNS error
+                        if (connectionsVm.quickConnect(quick).host.isBlank()) {
+                            quickError = "Enter a host (user@host:port)"
+                        } else if (quick.isNotBlank()) {
                             tabsVm.openQuick(quick)
                             showQuick = false
                         }
@@ -619,7 +630,7 @@ private fun TerminalTabBody(
             keyboardActions = KeyboardActions(onDone = { submitReturn() }),
         )
 
-        if (state == SshState.ERROR) {
+        if (state == SshState.ERROR && !isDemo) {
             Text(
                 connStatus,
                 color = MaterialTheme.colorScheme.error,
@@ -687,7 +698,13 @@ private fun TerminalTabBody(
                     )
                     TextButton(onClick = { showPwField = true }) { Text("Change") }
                     Button(onClick = { doConnect(password.ifBlank { savedPw }) }) {
-                        Text(if (state == SshState.CONNECTING) "…" else if (connStatus == "Disconnected") "Reconnect" else "Connect")
+                        if (state == SshState.CONNECTING) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else if (connStatus == "Disconnected") {
+                            Text("Reconnect")
+                        } else {
+                            Text("Connect")
+                        }
                     }
                 }
             } else {
@@ -699,12 +716,19 @@ private fun TerminalTabBody(
                         visualTransformation = if (pwVisible) VisualTransformation.None else PasswordVisualTransformation(),
                         trailingIcon = {
                             IconButton(onClick = { pwVisible = !pwVisible }) {
-                                Icon(if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Show")
+                                Icon(
+                                    if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                    if (pwVisible) "Hide" else "Show",
+                                )
                             }
                         },
                     )
                     Button(onClick = { doConnect(password.ifBlank { savedPw }) }) {
-                        Text(if (state == SshState.CONNECTING) "…" else "Connect")
+                        if (state == SshState.CONNECTING) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Text("Connect")
+                        }
                     }
                 }
             }
@@ -795,7 +819,7 @@ private fun renderScreen(
     rows: Int,
     primary: androidx.compose.ui.graphics.Color,
 ): AnnotatedString {
-    return androidx.compose.ui.text.buildAnnotatedString {
+    return buildAnnotatedString {
         val visible = snapshot.lines.takeLast(rows)
         visible.forEachIndexed { i, line ->
             var fg = -1
@@ -890,8 +914,7 @@ private fun ModNavRow(
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val escTab = listOf("Esc" to ESC, "Tab" to "\u0009")
-        escTab.forEach { (label, seq) ->
+        TOP_ROW_KEYS.forEach { (label, seq) ->
             TextButton(
                 onClick = { onSend(seq) },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
@@ -929,19 +952,11 @@ private fun ModChip(label: String, mode: ModMode, onClick: () -> Unit) {
 
 // NOTE: ESC is factored into the ESC constant (0x1B) so no raw control bytes
 // ever appear in source. Ctrl+X / Tab are written as explicit unicode escapes.
-internal val SYMBOL_KEYS = listOf(
-    "Esc" to ESC, "Tab" to "\u0009", "Enter" to "\r",
-    "|" to "|", "~" to "~", "-" to "-", "_" to "_",
-    "/" to "/", "\\" to "\\", ":" to ":", ";" to ";",
-    "\"" to "\"", "'" to "'", "$" to "$", "&" to "&",
-    "*" to "*", "=" to "=", "+" to "+", "!" to "!", "?" to "?", "#" to "#",
+/** Row 1 static keys (Esc/Tab flank the one-shot Ctrl/Alt/AltGr chips). */
+internal val TOP_ROW_KEYS = listOf(
+    "Esc" to ESC, "Tab" to "\u0009",
 )
-internal val NAV_KEYS = listOf(
-    "<-" to ESC + "[D", "Up" to ESC + "[A", "Dn" to ESC + "[B", "->" to ESC + "[C",
-    "Home" to ESC + "[H", "End" to ESC + "[F", "PgUp" to ESC + "[5~", "PgDn" to ESC + "[6~",
-    "Ins" to ESC + "[2~", "Del" to ESC + "[3~",
-)
-/** Row 1 arrows (subset of NAV_KEYS shown around the one-shot modifiers). */
+/** Row 1 arrows shown around the one-shot modifiers. */
 internal val NAV_ARROWS = listOf(
     "<-" to ESC + "[D", "Up" to ESC + "[A", "Dn" to ESC + "[B", "->" to ESC + "[C",
 )

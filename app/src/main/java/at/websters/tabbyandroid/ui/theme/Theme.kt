@@ -85,6 +85,14 @@ fun statusColor(state: at.websters.tabbyandroid.data.ssh.SshState): Color = when
     at.websters.tabbyandroid.data.ssh.SshState.DISCONNECTED -> StatusIdle
 }
 
+/** TalkBack label for the status dots (color alone means nothing to AT). */
+fun statusLabel(state: at.websters.tabbyandroid.data.ssh.SshState): String = when (state) {
+    at.websters.tabbyandroid.data.ssh.SshState.CONNECTED -> "Connected"
+    at.websters.tabbyandroid.data.ssh.SshState.CONNECTING -> "Connecting"
+    at.websters.tabbyandroid.data.ssh.SshState.ERROR -> "Connection error"
+    at.websters.tabbyandroid.data.ssh.SshState.DISCONNECTED -> "Disconnected"
+}
+
 /** xterm-ish palette for TerminalBuffer fg/bg indices 0..7 */
 fun termColor(index: Int, dark: Boolean = true): Color {
     val darkPalette = listOf(

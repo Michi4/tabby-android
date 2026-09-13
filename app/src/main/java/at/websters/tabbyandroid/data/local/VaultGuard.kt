@@ -12,14 +12,20 @@ import javax.crypto.spec.GCMParameterSpec
  * Keystore-guarded storage for the vault passphrase ("unlock with biometrics
  * or device PIN every time" mode).
  *
- * A per-app AES-256-GCM key requires user authentication for every use and
- * lives in AndroidKeyStore (never leaves the TEE/StrongBox). Sealed blobs
- * (base64 iv+ciphertext) are safe in plain prefs - only the Keystore key,
- * gated behind a fresh biometric/device-credential auth, can open them.
+ * A per-app AES-256-GCM key requires user authentication and lives in
+ * AndroidKeyStore (never leaves the TEE/StrongBox). Sealed blobs (base64
+ * iv+ciphertext) are safe in plain prefs - only the Keystore key, gated
+ * behind user verification, can open them.
  *
- * Correct usage REQUIRES the decrypt cipher to be unlocked by a BiometricPrompt
- * CryptoObject (see ui.util.Biometrics) - a bare prompt without CryptoObject
- * does not authorize Keystore keys.
+ * Actual design (see ui.util.Biometrics): every unlock/seal shows a system
+ * BiometricPrompt FIRST and only then touches the key, so in practice the
+ * crypto always follows a fresh authentication. The Keystore key itself
+ * carries a 60-second auth window (setUserAuthenticationParameters(60, ...))
+ * rather than a per-use CryptoObject — a deliberate compat tradeoff (works
+ * back to API 26 without CryptoObject plumbing). Consequence: any code
+ * running within 60s of an auth could also use the key. Tightening to a
+ * per-use CryptoObject (0s window) is possible future hardening, but changes
+ * the biometric flow and needs on-device verification — do not "fix" blindly.
  */
 object VaultGuard {
     const val ALIAS = "tabby_vault_guard"

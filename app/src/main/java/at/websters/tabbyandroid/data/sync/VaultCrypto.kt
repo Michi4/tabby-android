@@ -37,12 +37,19 @@ object VaultCrypto {
         val contentsB64: String,
         val saltHex: String,
         val ivHex: String,
-    )
+    ) {
+        // Ciphertext is not secret, but keep logs clean by construction.
+        override fun toString(): String =
+            "StoredVault(version=$version, contentsB64=<redacted ${contentsB64.length} chars>)"
+    }
 
     data class VaultContent(
         val config: Map<String, Any?>,
         val secrets: List<Any?>,
-    )
+    ) {
+        // DECRYPTED config + secrets — must never appear in logs.
+        override fun toString(): String = "VaultContent(<redacted>)"
+    }
 
     /** Extracts the stored vault from a remote config map (`{vault: {...}, ...}`). */
     fun parseStored(map: Map<*, *>): StoredVault? {
@@ -62,11 +69,30 @@ object VaultCrypto {
     fun decrypt(vault: StoredVault, passphrase: String): VaultContent {
         if (vault.version != 1) throw VaultFormatException("Unsupported vault format version ${vault.version}")
         require(passphrase.isNotEmpty()) { "Enter the vault passphrase" }
+        // Envelope fields are validated BEFORE any crypto: corrupt hex/base64
+        // means a damaged vault (format error), never a wrong passphrase.
+        val salt = try {
+            hexToBytes(vault.saltHex)
+        } catch (_: IllegalArgumentException) {
+            throw VaultFormatException("Invalid vault data")
+        }
+        val iv = try {
+            hexToBytes(vault.ivHex)
+        } catch (_: IllegalArgumentException) {
+            throw VaultFormatException("Invalid vault data")
+        }
+        val contents = try {
+            base64ToBytes(vault.contentsB64)
+        } catch (_: IllegalArgumentException) {
+            throw VaultFormatException("Invalid vault data")
+        }
         try {
-            val key = derive(passphrase, hexToBytes(vault.saltHex))
+            val key = derive(passphrase, salt)
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(hexToBytes(vault.ivHex)))
-            val plain = String(cipher.doFinal(base64ToBytes(vault.contentsB64)), Charsets.UTF_8)
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
+            val plain = String(cipher.doFinal(contents), Charsets.UTF_8)
+            // Post-decrypt garbage (bad padding already threw above; non-JSON
+            // here) means the key was wrong — the common wrong-passphrase case.
             val json = kotlinx.serialization.json.Json.parseToJsonElement(plain).jsonObject
             val config = (json["config"] as? JsonObject)?.toPlainMap() ?: emptyMap()
             val secrets = (json["secrets"] as? JsonArray)?.toPlainList() ?: emptyList()
@@ -74,9 +100,9 @@ object VaultCrypto {
         } catch (e: VaultFormatException) {
             throw e
         } catch (e: IllegalArgumentException) {
-            throw e
+            throw VaultBadPassphraseException()
         } catch (_: Exception) {
-            // wrong passphrase (bad padding), corrupt base64/hex, or non-JSON payload
+            // wrong passphrase (bad padding) or otherwise undecryptable payload
             throw VaultBadPassphraseException()
         }
     }

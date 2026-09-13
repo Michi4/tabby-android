@@ -93,4 +93,31 @@ class VaultCryptoTest {
             assertTrue(e.message!!.contains("passphrase"))
         }
     }
+
+    @Test fun corruptHexIsFormatErrorNotPassphraseError() {
+        val (stored, pw) = vector()
+        try {
+            VaultCrypto.decrypt(stored.copy(saltHex = "zz"), pw)
+            fail("must throw")
+        } catch (e: VaultFormatException) {
+            assertTrue(e.message!!.contains("Invalid vault"))
+        }
+    }
+
+    @Test fun corruptBase64IsFormatError() {
+        val (stored, pw) = vector()
+        try {
+            VaultCrypto.decrypt(stored.copy(contentsB64 = "!!!not-base64!!!"), pw)
+            fail("must throw")
+        } catch (e: VaultFormatException) {
+            assertTrue(e.message!!.contains("Invalid vault"))
+        }
+    }
+
+    @Test fun secretHoldersRedactToString() {
+        val (stored, pw) = vector()
+        assertFalse(stored.toString().contains(stored.contentsB64))
+        val content = VaultCrypto.decrypt(stored, pw)
+        assertFalse(content.toString().contains("vector.example.com"))
+    }
 }

@@ -197,21 +197,34 @@ private fun TerminalPrefsCard(tabsVm: TerminalTabsViewModel) {
 
     if (showFontEdit) {
         var draft by remember(prefs.fontSize) { mutableStateOf("${prefs.fontSize}") }
+        var fontError by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { showFontEdit = false },
             title = { Text("Font size (sp)") },
             text = {
                 OutlinedTextField(
                     value = draft,
-                    onValueChange = { draft = it.filter { c -> c.isDigit() }.take(3) },
+                    onValueChange = {
+                        draft = it.filter { c -> c.isDigit() }.take(3)
+                        fontError = false
+                    },
+                    label = { Text("Size in sp (1–256)") },
                     singleLine = true,
+                    isError = fontError,
+                    supportingText = { if (fontError) Text("Enter a number from 1 to 256") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    draft.toIntOrNull()?.let { tabsVm.setUiFontSize(it) }
-                    showFontEdit = false
+                    val n = draft.toIntOrNull()
+                    if (n == null) {
+                        // don't silently swallow invalid input: explain, stay open
+                        fontError = true
+                    } else {
+                        tabsVm.setUiFontSize(n)
+                        showFontEdit = false
+                    }
                 }) { Text("Set") }
             },
             dismissButton = { TextButton(onClick = { showFontEdit = false }) { Text("Cancel") } },

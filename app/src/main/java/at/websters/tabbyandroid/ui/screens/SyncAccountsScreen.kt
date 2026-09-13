@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -29,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -43,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -211,8 +214,21 @@ fun SyncSection(
                     }
                     configs.forEach { c ->
                         val sel = picked == c.id
-                        TextButton(onClick = { picked = c.id }) {
-                            Text((if (sel) "✓ " else "") + "${c.name} (#${c.id})")
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .selectable(
+                                    selected = sel,
+                                    onClick = { picked = c.id },
+                                    role = Role.RadioButton,
+                                )
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = sel, onClick = null)
+                            Text(
+                                "${c.name} (#${c.id})",
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
                         }
                     }
                 }
@@ -306,7 +322,10 @@ private fun VaultUnlockRow(
                 visualTransformation = if (pwVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
                     IconButton(onClick = { pwVisible = !pwVisible }) {
-                        Icon(if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Show")
+                        Icon(
+                            if (pwVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                            if (pwVisible) "Hide" else "Show",
+                        )
                     }
                 },
             )

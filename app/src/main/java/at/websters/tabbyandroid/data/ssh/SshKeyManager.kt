@@ -11,7 +11,10 @@ import java.io.ByteArrayOutputStream
  */
 object SshKeyManager {
 
-    data class GeneratedKey(val privatePem: String, val publicOpenSsh: String)
+    data class GeneratedKey(val privatePem: String, val publicOpenSsh: String) {
+        // Never print private key material (logcat-safe by construction).
+        override fun toString(): String = "GeneratedKey(privatePem=<redacted>, publicOpenSsh=$publicOpenSsh)"
+    }
 
     /** Generates an RSA-3072 keypair. Returns PEM + `ssh-rsa ...` public line. */
     fun generateKey(comment: String = "tabby-android"): GeneratedKey {
