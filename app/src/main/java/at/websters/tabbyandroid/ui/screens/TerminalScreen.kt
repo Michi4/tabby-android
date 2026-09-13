@@ -59,6 +59,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -71,6 +72,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -101,11 +103,12 @@ import kotlinx.coroutines.launch
 internal const val ESC = "\u001B"
 
 /**
- * Termius-like terminal: browser-style tabs, read-only screen (tap it to
- * focus the sender) plus a dedicated sender bar whose every commit goes
- * straight into SSH exactly once, sticky CTRL/ALT toggles, collapsible
- * extended keys, long-press to copy. Tuned for tall 144Hz panels
- * (RedMagic 10 Pro): version-gated snapshots.
+ * Termius-like terminal: browser-style tabs, read-only screen that looks
+ * like direct input (an invisible sender owns the typed line; every commit
+ * goes straight into SSH exactly once; tap the screen to focus), sticky
+ * CTRL/ALT toggles, collapsible extended keys, long-press to copy,
+ * stick-to-bottom follow that never yanks scrolled-up reading. Tuned for
+ * tall 144Hz panels (RedMagic 10 Pro): version-gated snapshots.
  */
 @Composable
 fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
@@ -156,9 +159,16 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
                 enabled = tabs.size > 1,
             ) { Icon(Icons.Filled.ChevronRight, "Next tab") }
             IconButton(onClick = { showQuick = true }) { Icon(Icons.Filled.Add, "New tab") }
+            // single tab: no strip needed, but keep a way to close it
+            if (tabs.size == 1 && active != null) {
+                IconButton(onClick = { tabsVm.close(active.id) }) {
+                    Icon(Icons.Filled.Close, "Close tab")
+                }
+            }
         }
 
-        // ---- tab strip ----
+        // ---- tab strip (only for 2+ tabs, to leave room for the terminal) ----
+        if (tabs.size > 1) {
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                 .padding(horizontal = 8.dp, vertical = 2.dp),
@@ -202,6 +212,7 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
                     }
                 }
             }
+        }
         }
 
         val current = tabs.find { it.id == activeId } ?: tabs.lastOrNull()
@@ -260,7 +271,6 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
     var ctrl by remember(tab.id) { mutableStateOf(false) }
     var alt by remember(tab.id) { mutableStateOf(false) }
     var keysOpen by remember(tab.id) { mutableStateOf(true) }
-    var localEcho by remember(tab.id) { mutableStateOf(false) }
     var password by remember(tab.id) { mutableStateOf(SessionPasswords.take(tab.profile.id)) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
@@ -272,8 +282,13 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
     val scroll = rememberScrollState()
 
     val snapshot = remember(version, tab.id) { tab.conn.buffer.snapshot() }
+    // stick to bottom only while the user is already near it: reading
+    // scrolled-up history must never yank, and fitting content never jumps
+    val stickSlopPx = with(LocalDensity.current) { 64.dp.toPx() }
     LaunchedEffect(version) {
-        if (follow) scroll.scrollTo(scroll.maxValue)
+        if (follow && scroll.maxValue - scroll.value <= stickSlopPx) {
+            scroll.scrollTo(scroll.maxValue)
+        }
     }
 
     // key material + password, taken once per tab and remembered across retries
@@ -321,8 +336,6 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
             FilterChip(selected = follow, onClick = { follow = !follow },
                 label = { Text("Follow") },
                 leadingIcon = { Icon(Icons.Filled.VerticalAlignBottom, null) })
-            FilterChip(selected = localEcho, onClick = { localEcho = !localEcho },
-                label = { Text("Echo") })
             FilterChip(selected = ctrl, onClick = { ctrl = !ctrl }, label = { Text("CTRL") })
             FilterChip(selected = alt, onClick = { alt = !alt }, label = { Text("ALT") })
         IconButton(onClick = {
@@ -399,16 +412,14 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
                 } else {
                     repeat(edit.deletions) { tab.conn.send(CtrlKeys.byteString(127.toByte())) }
                     for (ch in edit.sendText) sendTermChar(ch)
-                    // local echo (off by default): show keystrokes instantly
-                    if (localEcho && edit.sendText.isNotEmpty()) {
-                        tab.conn.buffer.feed(edit.sendText.toByteArray())
-                    }
                     input = nv
                 }
             },
+            // invisible (1dp, transparent) but focusable: the screen looks
+            // like direct terminal input; server echo shows what you type
             modifier = Modifier.fillMaxWidth()
-                .background(Color.Black)
-                .padding(horizontal = 8.dp, vertical = 2.dp)
+                .height(1.dp)
+                .alpha(0f)
                 .focusRequester(focusRequester)
                 .onKeyEvent {
                     if (it.type != KeyEventType.KeyDown) return@onKeyEvent false
@@ -442,17 +453,6 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
                 imeAction = ImeAction.Done,
             ),
             keyboardActions = KeyboardActions(onDone = { submitReturn() }),
-            decorationBox = { inner ->
-                if (input.text == SENDER_SENTINEL) {
-                    Text(
-                        "› type here — tap screen to focus",
-                        color = Color.Gray,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = fontSize.sp,
-                    )
-                }
-                inner()
-            },
         )
 
         if (state == SshState.ERROR) {
