@@ -3,7 +3,10 @@ package at.websters.tabbyandroid.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudSync
@@ -13,6 +16,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -47,10 +51,15 @@ fun TabbyApp(
 
     // While the keyboard is open the bottom bar would sit behind it as dead
     // space, pushing terminal keys needlessly high — hide it (all routes gain
-    // room; the bar returns the moment the keyboard closes).
+    // room; the bar returns the moment the keyboard closes). The system
+    // gesture inset is dropped too while open (it hides behind the keyboard
+    // as well), so key rows land flush above the keyboard.
+    val imeOpen = WindowInsets.isImeVisible
     Scaffold(
+        contentWindowInsets = if (imeOpen) WindowInsets.systemBars.only(WindowInsetsSides.Top)
+            else ScaffoldDefaults.contentWindowInsets,
         bottomBar = {
-            AnimatedVisibility(visible = !WindowInsets.isImeVisible) {
+            AnimatedVisibility(visible = !imeOpen) {
             NavigationBar {
                 NavigationBarItem(
                     selected = route == Routes.CONNECTIONS,

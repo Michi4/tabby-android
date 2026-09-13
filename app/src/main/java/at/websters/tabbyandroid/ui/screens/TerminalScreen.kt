@@ -506,15 +506,16 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
         }
 
         // ---- extended keys: ride above the keyboard via IME insets, visible
-        // at all times. 1 row keeps symbols (Enter must stay reachable).
-        // combos live in the CTRL/ALT toggles + keyboard (no redundant rows).
+        // at all times; arrows on top, symbols (Enter) second, F-keys third.
+        // 8dp below mirrors the output padding above for symmetry. Combos live
+        // in the CTRL/ALT toggles + keyboard (no redundant rows).
         // the Enter key submits (sends CR + clears the sender like a real Return)
-        Column(Modifier.fillMaxWidth().imePadding()) {
+        Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).imePadding()) {
             if (keyRows >= 1) {
-                KeyRow(SYMBOL_KEYS) { seq -> if (seq == "\r") submitReturn() else tab.conn.send(seq) }
+                KeyRow(NAV_KEYS) { tab.conn.send(it) }
             }
             if (keyRows >= 2) {
-                KeyRow(NAV_KEYS) { tab.conn.send(it) }
+                KeyRow(SYMBOL_KEYS) { seq -> if (seq == "\r") submitReturn() else tab.conn.send(seq) }
             }
             if (keyRows >= 3) {
                 KeyRow(FN_KEYS) { tab.conn.send(it) }
