@@ -10,6 +10,9 @@ local.properties
 # Keystore
 *.jks
 *.keystore
+# Build artifacts (attached to GitHub releases, never committed)
+*.apk
+*.aab
 # Keys/certs - never commit real key material
 *.pem
 *.key
