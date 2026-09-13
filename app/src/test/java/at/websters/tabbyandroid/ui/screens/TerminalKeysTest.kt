@@ -18,13 +18,19 @@ class TerminalKeysTest {
     }
 
     @Test fun noRawControlBytesInLabels() {
-        val all = SYMBOL_KEYS + NAV_KEYS + FN_KEYS + COMBO_KEYS
+        val all = SYMBOL_KEYS + NAV_KEYS + FN_KEYS
         assertTrue(all.isNotEmpty())
         for ((label, _) in all) {
             for (b in bytes(label)) {
                 assertTrue("label '$label' contains control byte $b", b >= 0x20 || b == 0x0A)
             }
         }
+    }
+
+    @Test fun noRedundantComboRows() {
+        // combos live in the CTRL/ALT toggles + keyboard; key rows stay clean
+        val all = SYMBOL_KEYS + NAV_KEYS + FN_KEYS
+        assertTrue(all.none { (label, _) -> label.startsWith("Ctrl+") })
     }
 
     @Test fun symbolKeys() {
@@ -50,11 +56,9 @@ class TerminalKeysTest {
         assertEquals("\u001B[24~", m.getValue("F12"))
     }
 
-    @Test fun combosAreSingleControlBytes() {
-        val m = COMBO_KEYS.toMap()
-        assertEquals(listOf(0x03), bytes(m.getValue("Ctrl+C")))
-        assertEquals(listOf(0x04), bytes(m.getValue("Ctrl+D")))
-        assertEquals(listOf(0x1A), bytes(m.getValue("Ctrl+Z")))
-        assertEquals(listOf(0x12), bytes(m.getValue("Ctrl+R")))
+    @Test fun togglePathBytes() {
+        // CTRL/ALT toggles + keyboard replace the old combo rows; the byte
+        // mappings themselves are guarded in CtrlKeysTest
+        assertEquals("\u001B[C", NAV_KEYS.toMap().getValue("->"))
     }
 }

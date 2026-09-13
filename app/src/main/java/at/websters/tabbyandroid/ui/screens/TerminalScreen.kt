@@ -371,7 +371,9 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = { focusRequester.requestFocus() },
+                    // show() too: after an explicit BACK-close the system
+                    // won't re-open on focus alone
+                    onClick = { focusRequester.requestFocus(); keyboard?.show() },
                 ),
         ) {
             SelectionContainer {
@@ -500,15 +502,13 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
             }
         }
 
-        // ---- extended keyboard: symbols + arrows always visible, rest expands ----
+        // ---- extended keyboard: symbols + arrows always visible, F-keys expand.
+        // combos live in the CTRL/ALT toggles + keyboard (no redundant rows).
         // the Enter key submits (sends CR + clears the sender like a real Return)
         KeyRow(SYMBOL_KEYS) { seq -> if (seq == "\r") submitReturn() else tab.conn.send(seq) }
         KeyRow(NAV_KEYS) { tab.conn.send(it) }
         AnimatedVisibility(visible = keysOpen) {
-            Column {
-                KeyRow(FN_KEYS) { tab.conn.send(it) }
-                KeyRow(COMBO_KEYS) { tab.conn.send(it) }
-            }
+            KeyRow(FN_KEYS) { tab.conn.send(it) }
         }
     }
 
@@ -620,9 +620,4 @@ internal val FN_KEYS = listOf(
     "F1" to ESC + "OP", "F2" to ESC + "OQ", "F3" to ESC + "OR", "F4" to ESC + "OS",
     "F5" to ESC + "[15~", "F6" to ESC + "[17~", "F7" to ESC + "[18~", "F8" to ESC + "[19~",
     "F9" to ESC + "[20~", "F10" to ESC + "[21~", "F11" to ESC + "[23~", "F12" to ESC + "[24~",
-)
-internal val COMBO_KEYS = listOf(
-    "Ctrl+C" to "\u0003", "Ctrl+D" to "\u0004", "Ctrl+Z" to "\u001A",
-    "Ctrl+A" to "\u0001", "Ctrl+E" to "\u0005", "Ctrl+K" to "\u000B",
-    "Ctrl+L" to "\u000C", "Ctrl+U" to "\u0015", "Ctrl+W" to "\u0017", "Ctrl+R" to "\u0012",
 )

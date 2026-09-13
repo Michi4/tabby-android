@@ -43,7 +43,7 @@ the same key. Never commit keystores or passwords (both live outside git).
   pin hosts/folders to the top with manual ordering, manual add/edit/delete.
 - **Terminal**: browser-style compact tabs, tap-to-type straight into SSH
   (system keyboard, no send button), sticky CTRL/ALT toggles, collapsible
-  extended keys (symbols, arrows/Home/End/PgUp/PgDn/Ins/Del, F1–F12, combos),
+  extended keys (symbols, arrows/Home/End/PgUp/PgDn/Ins/Del, F1–F12),
   VT100/ANSI colors, cursor, follow-output, font size, copy line/screen, paste,
   clear, TOFU host-key accept dialog.
 - **SSH keys**: import PEM or generate RSA-3072 in-app (public key shown for
