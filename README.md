@@ -57,14 +57,14 @@ the same key. Never commit keystores or passwords (both live outside git).
 
 All screenshots use generic demo data (nothing real).
 
-| Hosts | Terminal | Sync |
+| Hosts | Terminal | Settings |
 |---|---|---|
-| ![Hosts](docs/screenshots/hosts.png) | ![Terminal](docs/screenshots/terminal.png) | ![Sync](docs/screenshots/sync.png) |
+| ![Hosts](docs/screenshots/hosts.png) | ![Terminal](docs/screenshots/terminal.png) | ![Settings](docs/screenshots/settings.png) |
 
 ## Configure
 
 1. Install the APK (see above).
-2. Open **Sync** → **+** → Name: `Home`, Host: your Tabby Web instance URL (https),
+2. Open **Settings** → **Sync** → **Add sync server** → Name: `Home`, Host: your Tabby Web instance URL (https),
    paste your **Secret sync token** (desktop Tabby → Settings → Config sync) →
    **Test & list configs** → pick config → **Save** → **Pull**.
    To send phone-side changes back, use **Upload** on the account card (confirm dialog first).

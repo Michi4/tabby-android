@@ -96,7 +96,7 @@ class ConnectionsViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val accounts = repo.accounts.first()
                 if (accounts.isEmpty()) {
-                    _msg.value = "Add your Tabby Web instance first (Sync tab)"
+                    _msg.value = "Add your Tabby Web instance first (Settings → Sync)"
                     return@launch
                 }
                 val merged = mutableListOf<SshProfile>()
@@ -259,10 +259,39 @@ class ConnectionsViewModel(app: Application) : AndroidViewModel(app) {
 class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
     data class Tab(val id: String = UUID.randomUUID().toString(), val profile: SshProfile, val conn: SshConnection)
 
+    private val repo = ProfileRepository(app)
+
     private val _tabs = MutableStateFlow<List<Tab>>(emptyList())
     val tabs: StateFlow<List<Tab>> = _tabs
     private val _active = MutableStateFlow<String?>(null)
     val active: StateFlow<String?> = _active
+
+    /**
+     * Terminal defaults (Settings → Terminal); new tabs pick these up.
+     * Eagerly hot so the values are loaded before any tab can open —
+     * a lazily-started share could bake fallback defaults into a tab
+     * that composes before the first DataStore emission lands.
+     */
+    val uiPrefs: StateFlow<at.websters.tabbyandroid.data.local.UiPrefs> = combine(
+        repo.uiFontSize, repo.uiFollow, repo.uiKeyRows,
+    ) { fontSize, follow, keyRows ->
+        at.websters.tabbyandroid.data.local.UiPrefs(fontSize, follow, keyRows)
+    }.stateIn(
+        viewModelScope, SharingStarted.Eagerly,
+        at.websters.tabbyandroid.data.local.UiPrefs(),
+    )
+
+    fun setUiFontSize(sizeSp: Int) {
+        viewModelScope.launch { repo.setUiFontSize(sizeSp) }
+    }
+
+    fun setUiFollow(follow: Boolean) {
+        viewModelScope.launch { repo.setUiFollow(follow) }
+    }
+
+    fun setUiKeyRows(rows: Int) {
+        viewModelScope.launch { repo.setUiKeyRows(rows) }
+    }
 
     fun open(profile: SshProfile): String {
         val knownHosts = java.io.File(getApplication<Application>().filesDir, "known_hosts")

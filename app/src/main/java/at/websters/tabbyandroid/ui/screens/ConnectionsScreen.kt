@@ -194,7 +194,7 @@ fun ConnectionsScreen(
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("No hosts yet", style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    "Pull SSH profiles from your Tabby Web instance (Sync tab), " +
+                                    "Pull SSH profiles from your Tabby Web instance (Settings → Sync), " +
                                         "tap + for a manual host, or type user@host:port below.",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,

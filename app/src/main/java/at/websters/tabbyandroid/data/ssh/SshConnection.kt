@@ -198,7 +198,7 @@ fun SshConnection.friendlyError(e: Exception): String {
         m.contains("has been changed", ignoreCase = true) ->
             "HOST KEY CHANGED — the server's key differs from the saved one. " +
                 "Possible attack: not connecting. If the server was reinstalled, " +
-                "use Sync → Forget saved host keys, then reconnect."
+                "use Settings → Privacy → Forget saved host keys, then reconnect."
         m.contains("ECONNREFUSED", ignoreCase = true) || m.contains("Connection refused", ignoreCase = true) ->
             "Connection refused — is SSH running on ${profile.host}:${profile.port}?"
         m.contains("Auth fail", ignoreCase = true) ->

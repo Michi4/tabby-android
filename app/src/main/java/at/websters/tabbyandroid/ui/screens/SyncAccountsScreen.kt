@@ -1,13 +1,11 @@
 package at.websters.tabbyandroid.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -27,17 +25,14 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -45,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -58,11 +54,12 @@ import at.websters.tabbyandroid.ui.state.SyncAccountsViewModel
 import java.util.UUID
 
 /**
- * Multiple Tabby Web instances, each with own host + token + chosen remote config.
- * Like desktop Tabby, the host field starts empty: sync needs your own instance.
+ * Sync servers section (Settings → Sync): multiple Tabby Web instances, each
+ * with own host + token + chosen remote config. Like desktop Tabby, the host
+ * field starts empty: sync needs your own instance.
  */
 @Composable
-fun SyncAccountsScreen(
+fun SyncSection(
     vm: SyncAccountsViewModel,
     connections: ConnectionsViewModel,
 ) {
@@ -77,50 +74,35 @@ fun SyncAccountsScreen(
 
     LaunchedEffect(msg) { msg?.let { snack.showSnackbar(it); vm.dismiss() } }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snack) },
-        floatingActionButton = {
-            FloatingActionButton(onClick = {
+    Box(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Config sync requires an instance of the Tabby Web service.")
+                    TextButton(onClick = { uriHandler.openUri(ProfileRepository.SYNC_DOCS_URL) }) {
+                        Text("Learn more")
+                    }
+                }
+            }
+            Button(onClick = {
                 editing = SyncAccount(
                     id = UUID.randomUUID().toString(),
                     name = if (accounts.isEmpty()) "Home" else "Server ${accounts.size + 1}",
                     hostUrl = "",
                 )
-            }) { Icon(Icons.Filled.Add, "Add sync server") }
-        }
-    ) { pad ->
-        LazyColumn(Modifier.fillMaxSize().padding(pad).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            }) {
+                Icon(Icons.Filled.Add, null)
+                Text("Add sync server")
+            }
             if (accounts.isEmpty()) {
-                item {
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                "Unofficial community client — not affiliated with the Tabby developers.",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text("Config sync requires an instance of the Tabby Web service.")
-                            TextButton(onClick = { uriHandler.openUri(ProfileRepository.SYNC_DOCS_URL) }) {
-                                Text("Learn more")
-                            }
-                        }
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("No sync servers", style = MaterialTheme.typography.titleMedium)
+                        Text("Add your Tabby Web instance URL plus your sync token (desktop Tabby → Settings → Config sync shows the same token). Multiple servers supported.")
                     }
                 }
             }
-            item {
-                PrivacyCard(vm)
-            }
-            if (accounts.isEmpty()) {
-                item {
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("No sync servers", style = MaterialTheme.typography.titleMedium)
-                            Text("Add your Tabby Web instance URL plus your sync token (desktop Tabby → Settings → Config sync shows the same token). Multiple servers supported.")
-                        }
-                    }
-                }
-            }
-            items(accounts, key = { it.id }) { acc ->
+            accounts.forEach { acc ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -168,6 +150,7 @@ fun SyncAccountsScreen(
                 }
             }
         }
+        SnackbarHost(snack, modifier = Modifier.align(Alignment.BottomCenter))
     }
 
     confirmUpload?.let { acc ->
@@ -246,39 +229,6 @@ fun SyncAccountsScreen(
             },
             dismissButton = { TextButton(onClick = { editing = null }) { Text("Cancel") } },
         )
-    }
-}
-
-@Composable
-private fun PrivacyCard(vm: SyncAccountsViewModel) {
-    val allowScreen by vm.allowScreen.collectAsState()
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Privacy", style = MaterialTheme.typography.titleMedium)
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            ) {
-                Text(
-                    "Allow screenshots & screen sharing",
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                androidx.compose.material3.Switch(
-                    checked = allowScreen,
-                    onCheckedChange = vm::setAllowScreen,
-                )
-            }
-            Text(
-                "Screenshots are blocked by default: terminal output routinely contains secrets.",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            TextButton(onClick = { vm.forgetHostKeys() }) {
-                Text("Forget saved host keys")
-            }
-        }
     }
 }
 

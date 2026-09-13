@@ -3,6 +3,7 @@ package at.websters.tabbyandroid.data.local
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import at.websters.tabbyandroid.data.model.SshProfile
@@ -16,6 +17,25 @@ import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
 private val Context.tabbyStore by preferencesDataStore(name = "tabby_client")
+
+/** Defaults for [ProfileRepository] terminal prefs (new tabs pick these up). */
+object UiPrefsDefaults {
+    const val FONT_SIZE = 13
+    const val FOLLOW = true
+    const val KEY_ROWS = 3
+}
+
+/** Snapshot of terminal defaults. */
+data class UiPrefs(
+    val fontSize: Int = UiPrefsDefaults.FONT_SIZE,
+    val follow: Boolean = UiPrefsDefaults.FOLLOW,
+    val keyRows: Int = UiPrefsDefaults.KEY_ROWS,
+)
+
+/** Clampers (pure, unit-tested): prefs storage can hold anything. */
+fun sanitizeFontSize(sizeSp: Int): Int = sizeSp.coerceIn(10, 20)
+
+fun sanitizeKeyRows(rows: Int): Int = rows.coerceIn(0, 3)
 
 /**
  * Single DataStore for sync accounts + cached + manual profiles.
@@ -35,6 +55,9 @@ class ProfileRepository(private val appContext: Context) {
         private val KEY_COLLAPSED = stringPreferencesKey("collapsed_json")
         private val KEY_GROUPS = stringPreferencesKey("groups_json")
         private val KEY_ALLOW_SCREEN = booleanPreferencesKey("allow_screen_capture")
+        private val KEY_UI_FONT = intPreferencesKey("ui_font_size")
+        private val KEY_UI_FOLLOW = booleanPreferencesKey("ui_follow")
+        private val KEY_UI_ROWS = intPreferencesKey("ui_key_rows")
         private val KEY_VAULT_LOCK = stringPreferencesKey("vault_lock_json")
         private val KEY_VAULT_SEALED = stringPreferencesKey("vault_sealed_json")
         /** Where to get a sync service (self-hosted Tabby Web), shown as a Learn-more link. */
@@ -52,6 +75,35 @@ class ProfileRepository(private val appContext: Context) {
 
     suspend fun setAllowScreenCapture(allow: Boolean) {
         appContext.tabbyStore.edit { it[KEY_ALLOW_SCREEN] = allow }
+    }
+
+    /**
+     * Terminal defaults for newly opened tabs (Settings → Terminal).
+     * Open tabs keep their own runtime toggles; changing a default never
+     * yanks an active session.
+     */
+    val uiFontSize: Flow<Int> = appContext.tabbyStore.data.map {
+        sanitizeFontSize(it[KEY_UI_FONT] ?: UiPrefsDefaults.FONT_SIZE)
+    }
+
+    val uiFollow: Flow<Boolean> = appContext.tabbyStore.data.map {
+        it[KEY_UI_FOLLOW] ?: UiPrefsDefaults.FOLLOW
+    }
+
+    val uiKeyRows: Flow<Int> = appContext.tabbyStore.data.map {
+        sanitizeKeyRows(it[KEY_UI_ROWS] ?: UiPrefsDefaults.KEY_ROWS)
+    }
+
+    suspend fun setUiFontSize(sizeSp: Int) {
+        appContext.tabbyStore.edit { it[KEY_UI_FONT] = sanitizeFontSize(sizeSp) }
+    }
+
+    suspend fun setUiFollow(follow: Boolean) {
+        appContext.tabbyStore.edit { it[KEY_UI_FOLLOW] = follow }
+    }
+
+    suspend fun setUiKeyRows(rows: Int) {
+        appContext.tabbyStore.edit { it[KEY_UI_ROWS] = sanitizeKeyRows(rows) }
     }
 
     val accounts: Flow<List<SyncAccount>> = appContext.tabbyStore.data.map {

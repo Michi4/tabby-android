@@ -9,8 +9,8 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -26,7 +26,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import at.websters.tabbyandroid.ui.screens.ConnectionsScreen
-import at.websters.tabbyandroid.ui.screens.SyncAccountsScreen
+import at.websters.tabbyandroid.ui.screens.SettingsScreen
 import at.websters.tabbyandroid.ui.screens.TerminalScreen
 import at.websters.tabbyandroid.ui.state.ConnectionsViewModel
 import at.websters.tabbyandroid.ui.state.SyncAccountsViewModel
@@ -35,7 +35,7 @@ import at.websters.tabbyandroid.ui.state.TerminalTabsViewModel
 object Routes {
     const val CONNECTIONS = "connections"
     const val TERMINAL = "terminal"
-    const val SYNC = "sync"
+    const val SETTINGS = "settings"
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -74,10 +74,10 @@ fun TabbyApp(
                     label = { Text("Terminal") },
                 )
                 NavigationBarItem(
-                    selected = route == Routes.SYNC,
-                    onClick = { nav.navigate(Routes.SYNC) { launchSingleTop = true } },
-                    icon = { Icon(Icons.Filled.CloudSync, null) },
-                    label = { Text("Sync") },
+                    selected = route == Routes.SETTINGS,
+                    onClick = { nav.navigate(Routes.SETTINGS) { launchSingleTop = true } },
+                    icon = { Icon(Icons.Filled.Settings, null) },
+                    label = { Text("Settings") },
                 )
             }
             }
@@ -88,7 +88,7 @@ fun TabbyApp(
                 ConnectionsScreen(connections, tabs, onOpenTerminal = { nav.navigate(Routes.TERMINAL) })
             }
             composable(Routes.TERMINAL) { TerminalScreen(tabs) }
-            composable(Routes.SYNC) { SyncAccountsScreen(accounts, connections) }
+            composable(Routes.SETTINGS) { SettingsScreen(accounts, connections, tabs) }
         }
     }
 }

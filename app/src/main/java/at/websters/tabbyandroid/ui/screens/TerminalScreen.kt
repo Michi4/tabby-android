@@ -91,6 +91,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import at.websters.tabbyandroid.data.local.UiPrefs
 import at.websters.tabbyandroid.data.ssh.CtrlKeys
 import at.websters.tabbyandroid.data.ssh.SENDER_SENTINEL
 import at.websters.tabbyandroid.data.ssh.SshState
@@ -115,6 +116,7 @@ internal const val ESC = "\u001B"
 fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
     val tabs by tabsVm.tabs.collectAsState()
     val activeId by tabsVm.active.collectAsState()
+    val prefs by tabsVm.uiPrefs.collectAsState()
     var showQuick by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
@@ -226,7 +228,7 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
                 }
             }
         } else {
-            TerminalTabBody(tab = current, modifier = Modifier.weight(1f))
+            TerminalTabBody(tab = current, prefs = prefs, modifier = Modifier.weight(1f))
         }
     }
 
@@ -258,7 +260,11 @@ fun TerminalScreen(tabsVm: TerminalTabsViewModel) {
 }
 
 @Composable
-private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier = Modifier) {
+private fun TerminalTabBody(
+    tab: TerminalTabsViewModel.Tab,
+    prefs: UiPrefs,
+    modifier: Modifier = Modifier,
+) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -266,14 +272,15 @@ private fun TerminalTabBody(tab: TerminalTabsViewModel.Tab, modifier: Modifier =
     val connStatus by tab.conn.status.collectAsState()
     val version by tab.conn.buffer.updates.collectAsState()
     var showHostKey by remember { mutableStateOf<String?>(null) }
-    var follow by remember(tab.id) { mutableStateOf(true) }
-    var fontSize by remember { mutableIntStateOf(13) }
+    // runtime toggles, seeded from Settings → Terminal (new tabs only)
+    var follow by remember(tab.id) { mutableStateOf(prefs.follow) }
+    var fontSize by remember(tab.id) { mutableIntStateOf(prefs.fontSize) }
     var pwVisible by remember { mutableStateOf(false) }
     var ctrl by remember(tab.id) { mutableStateOf(false) }
     var alt by remember(tab.id) { mutableStateOf(false) }
     // extended-key rows on screen: 3 -> 2 -> 1 -> hidden, cycles on toggle
     // (saveable: survives rotation per tab)
-    var keyRows by rememberSaveable(tab.id) { mutableIntStateOf(3) }
+    var keyRows by rememberSaveable(tab.id) { mutableIntStateOf(prefs.keyRows) }
     var password by remember(tab.id) { mutableStateOf(SessionPasswords.take(tab.profile.id)) }
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current

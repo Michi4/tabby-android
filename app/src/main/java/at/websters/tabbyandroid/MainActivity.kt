@@ -23,7 +23,7 @@ import kotlinx.coroutines.launch
  * Single-activity app. Edge-to-edge for Android 16 (RedMagic 10 Pro),
  * handles display cutout + gesture nav via Scaffold insets.
  * Screenshots/screen capture are blocked by default (SSH shows live secrets);
- * the user can allow them in Sync → Privacy.
+ * the user can allow them in Settings → Privacy.
  * FragmentActivity (not ComponentActivity) so screens can show biometric prompts.
  */
 class MainActivity : FragmentActivity() {
