@@ -51,6 +51,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import at.websters.tabbyandroid.BuildConfig
 import at.websters.tabbyandroid.data.local.KeyLayout
+import at.websters.tabbyandroid.data.local.UiPrefsDefaults
 import at.websters.tabbyandroid.data.local.allKeyIds
 import at.websters.tabbyandroid.data.local.defaultKeyRows
 import at.websters.tabbyandroid.data.local.keyLabelFor
@@ -126,6 +127,7 @@ private fun SwitchRow(
 @Composable
 private fun PrivacyCard(vm: SyncAccountsViewModel) {
     val allowScreen by vm.allowScreen.collectAsState()
+    val appLock by vm.appLock.collectAsState()
     Card(Modifier.fillMaxWidth()) {
         Column(
             Modifier.padding(horizontal = 12.dp, vertical = 6.dp).animateContentSize(),
@@ -141,6 +143,13 @@ private fun PrivacyCard(vm: SyncAccountsViewModel) {
                 "Terminal output often contains secrets — blocked by default.",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SwitchRow(
+                title = "Lock app",
+                subtitle = if (appLock) "Biometrics / device PIN on launch"
+                else "Anyone opening the app sees your hosts",
+                checked = appLock,
+                onChange = vm::setAppLock,
             )
             TextButton(onClick = { vm.forgetHostKeys() }) {
                 Text("Forget saved host keys")
@@ -189,6 +198,42 @@ private fun TerminalPrefsCard(tabsVm: TerminalTabsViewModel) {
                 checked = prefs.fullscreen,
                 onChange = tabsVm::setUiFullscreen,
             )
+            SwitchRow(
+                title = "Pinch to zoom",
+                subtitle = "Two-finger pinch changes font size",
+                checked = prefs.pinchZoom,
+                onChange = tabsVm::setUiPinchZoom,
+            )
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text("Scrollback", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Kept per tab, in session",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                OutlinedButton(onClick = {
+                    val opts = UiPrefsDefaults.SCROLLBACK_OPTIONS
+                    val i = opts.indexOf(prefs.scrollback)
+                    tabsVm.setUiScrollback(opts[(i + 1) % opts.size])
+                }) {
+                    Text("${prefs.scrollback / 1000}k lines")
+                }
+            }
+            SwitchRow(
+                title = "Command suggestions",
+                subtitle = "Ranked from commands you ran (encrypted)",
+                checked = prefs.suggestions,
+                onChange = tabsVm::setUiSuggestions,
+            )
+            TextButton(onClick = { tabsVm.clearHistory() }) {
+                Text("Clear command history")
+            }
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,

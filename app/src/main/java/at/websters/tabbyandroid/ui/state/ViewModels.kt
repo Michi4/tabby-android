@@ -273,6 +273,7 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     private val repo = ProfileRepository(app)
+    private val secrets = at.websters.tabbyandroid.data.local.SecureTokenStorage(app)
 
     private val _tabs = MutableStateFlow<List<Tab>>(emptyList())
     val tabs: StateFlow<List<Tab>> = _tabs
@@ -286,9 +287,20 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
      * that composes before the first DataStore emission lands.
      */
     val uiPrefs: StateFlow<at.websters.tabbyandroid.data.local.UiPrefs> = combine(
-        repo.uiFontSize, repo.uiFollow, repo.uiKeyRows, repo.uiFullscreen, repo.uiKeyLayout,
-    ) { fontSize, follow, keyRows, fullscreen, keyLayout ->
-        at.websters.tabbyandroid.data.local.UiPrefs(fontSize, follow, keyRows, fullscreen, keyLayout)
+        combine(
+            repo.uiFontSize, repo.uiFollow, repo.uiKeyRows,
+            repo.uiFullscreen, repo.uiKeyLayout,
+        ) { fontSize, follow, keyRows, fullscreen, keyLayout ->
+            // nested: this coroutines version has no 6+ flow typed overload
+            at.websters.tabbyandroid.data.local.UiPrefs(
+                fontSize, follow, keyRows, fullscreen, keyLayout
+            )
+        },
+        repo.uiPinchZoom,
+        repo.uiSuggestions,
+        repo.uiScrollback,
+    ) { prefs, pinchZoom, suggestions, scrollback ->
+        prefs.copy(pinchZoom = pinchZoom, suggestions = suggestions, scrollback = scrollback)
     }.stateIn(
         viewModelScope, SharingStarted.Eagerly,
         at.websters.tabbyandroid.data.local.UiPrefs(),
@@ -310,6 +322,55 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repo.setUiFullscreen(fullscreen) }
     }
 
+    fun setUiPinchZoom(enabled: Boolean) {
+        viewModelScope.launch { repo.setUiPinchZoom(enabled) }
+    }
+
+    fun setUiSuggestions(enabled: Boolean) {
+        viewModelScope.launch { repo.setUiSuggestions(enabled) }
+    }
+
+    fun setUiScrollback(n: Int) {
+        viewModelScope.launch { repo.setUiScrollback(n) }
+    }
+
+    // ---- command history (frequency-ranked suggestions) + macros ----
+    // Encrypted at rest; synchronous tiny reads/writes, safe on the UI thread.
+
+    private val _historyTick = MutableStateFlow(0)
+    /** Bumped on every record/clear so suggestion rows refresh. */
+    val historyTick: StateFlow<Int> = _historyTick
+
+    fun loadHistory(): List<at.websters.tabbyandroid.data.local.CmdEntry> =
+        secrets.getCommandHistory()
+
+    fun recordCommand(cmd: String) {
+        val updated = at.websters.tabbyandroid.data.local.recordCommand(loadHistory(), cmd)
+        secrets.saveCommandHistory(updated)
+        _historyTick.value += 1
+    }
+
+    fun clearHistory() {
+        secrets.clearCommandHistory()
+        _historyTick.value += 1
+    }
+
+    private val _macrosTick = MutableStateFlow(0)
+    val macrosTick: StateFlow<Int> = _macrosTick
+
+    fun loadMacros(): List<at.websters.tabbyandroid.data.local.Macro> = secrets.getMacros()
+
+    fun addMacro(name: String, command: String) {
+        if (name.isBlank() || command.isBlank()) return
+        secrets.saveMacros(loadMacros() + at.websters.tabbyandroid.data.local.Macro(name.trim(), command))
+        _macrosTick.value += 1
+    }
+
+    fun deleteMacro(name: String) {
+        secrets.saveMacros(loadMacros().filterNot { it.name == name })
+        _macrosTick.value += 1
+    }
+
     fun setUiKeyLayout(layout: at.websters.tabbyandroid.data.local.KeyLayout) {
         viewModelScope.launch { repo.setUiKeyLayout(layout) }
     }
@@ -317,6 +378,7 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
     init {
         // Restore previously open tabs (as disconnected tabs — creds reload
         // from encrypted storage on reconnect, never from the tab record).
+        // Seeded with the last visible lines so recent history survives death.
         viewModelScope.launch {
             val saved = repo.openTabs.first()
             if (saved.isNotEmpty() && _tabs.value.isEmpty()) {
@@ -324,12 +386,18 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
                     getApplication<Application>().filesDir,
                     at.websters.tabbyandroid.data.ssh.KNOWN_HOSTS_NAME,
                 )
+                val scrollbacks = repo.openTabScrollback.first()
                 _tabs.value = saved.map { p ->
                     val conn: at.websters.tabbyandroid.data.ssh.TerminalConnection =
                         if (p.id.startsWith(at.websters.tabbyandroid.data.ssh.DEMO_SHELL_PREFIX)) {
                             at.websters.tabbyandroid.data.ssh.LocalShellConnection(p)
                         } else {
                             SshConnection(p, knownHostsFile = knownHosts)
+                        }
+                    scrollbacks[p.id]
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.let { lines ->
+                            conn.buffer.feed((lines.joinToString("\r\n") + "\r\n").toByteArray(Charsets.UTF_8))
                         }
                     Tab(profile = p, conn = conn)
                 }
@@ -341,6 +409,9 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
     private fun persistTabs() {
         viewModelScope.launch {
             repo.saveOpenTabs(_tabs.value.map { it.profile })
+            repo.saveOpenTabScrollback(
+                _tabs.value.associate { it.profile.id to it.conn.buffer.lastLines(200) }
+            )
         }
     }
 
@@ -530,6 +601,13 @@ class SyncAccountsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setAllowScreen(allow: Boolean) {
         viewModelScope.launch { repo.setAllowScreenCapture(allow) }
+    }
+
+    val appLock: StateFlow<Boolean> = repo.appLock
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setAppLock(locked: Boolean) {
+        viewModelScope.launch { repo.setAppLock(locked) }
     }
 
     fun forgetHostKeys() {

@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.4.3 (versionCode 8)
+
+### Gestures
+- Pinch-to-zoom font on the terminal (two fingers; tap, scroll and
+  long-press selection pass through untouched), toggleable in Settings.
+- Swipe tab-switching deliberately omitted: horizontal swipes collide with
+  text-selection drags on the output — chevrons + tab strip stay the
+  unambiguous switchers.
+
+### Command suggestions + macros
+- Fish-style suggestion chips above the keys, learned from commands you ran
+  (frequency-ranked, encrypted at rest, secret-looking lines never recorded),
+  toggleable in Settings with one-tap history clear. Tap fills the line for
+  review — nothing sends until you press Enter.
+- Macros: save name + command (encrypted), tap to fill, ▶ to run at once.
+
+### App lock + biometric robustness
+- Optional full app lock (Settings → Privacy): system biometrics/device PIN
+  on every launch and return; rotation doesn't re-prompt, backing out sends
+  the app to background instead of stranding it.
+- Why you never saw a biometric prompt before: biometrics only gate the
+  opt-in per-account *guarded vault* mode — default modes never prompt.
+
+### Find, scrollback, links
+- Find bar in the terminal (toolbar 🔍): searches the whole buffer incl.
+  scrollback, match count, prev/next with auto-scroll, current-hit highlight.
+- Scrollback size setting (1k–50k lines, default 5k); open tabs reopen with
+  their last 200 lines after process death (live tabs always keep everything).
+- URLs in output are tappable links (long-press still selects); select-all
+  keeps working through the native Android selection menu.
+
 ## 1.4.2 (versionCode 7)
 
 ### Adaptive viewport (redraws on every geometry change)

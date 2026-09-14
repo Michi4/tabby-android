@@ -37,7 +37,7 @@ private val WIDE: BooleanArray by lazy {
  * OSC/DCS swallowing, charset/mode swallowing, DSR responses (queued for the
  * connection to write back). Unknown sequences degrade, never crash.
  */
-class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, val maxScrollback: Int = 2000) {
+class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: Int = 2000) {
 
     data class Cell(
         val ch: Char = ' ',
@@ -250,6 +250,9 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, val maxScrollback: 
     }
 
     private fun viewportBase(): Int = (active().size - rows).coerceAtLeast(0)
+
+    /** First visible deque index (UI maps absolute search hits to rows). */
+    fun visibleBase(): Int = viewportBase()
 
     private fun physRow(logical: Int): Int = viewportBase() + logical.coerceIn(0, rows - 1)
 
@@ -775,14 +778,42 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, val maxScrollback: 
         }
     }
 
+    /** Plain text of one line (wide second-halves skipped, like the display). */
+    private fun lineText(line: List<Cell>): String =
+        line.filter { !it.wide2nd }.joinToString("") { it.ch.toString() }
+
+    /** Changes the scrollback cap (Settings), trimming oldest lines at once. */
+    @Synchronized
+    fun updateMaxScrollback(n: Int) {
+        maxScrollback = n.coerceIn(1000, 50000)
+        while (main.size > rows + maxScrollback) main.removeAt(0)
+        version++
+        _updates.value = version
+    }
+
+    /**
+     * Absolute deque indices of lines containing [query] (case-insensitive).
+     * Pure search for the find bar; UI subtracts [visibleBase] for rows.
+     */
+    @Synchronized
+    fun searchLines(query: String): List<Int> {
+        if (query.isEmpty()) return emptyList()
+        return active().mapIndexedNotNull { i, line ->
+            if (lineText(line).contains(query, ignoreCase = true)) i else null
+        }
+    }
+
+    /** Last [n] main-screen lines as plain text (for tab-restore seeding). */
+    @Synchronized
+    fun lastLines(n: Int): List<String> =
+        main.takeLast(n.coerceIn(1, 500)).map { lineText(it).trimEnd() }
+
     /** Plain-text dump of visible screen (for tests / accessibility / search). */
     @Synchronized
     fun visibleText(): String {
         val base = viewportBase()
         return (0 until rows).joinToString("\n") { r ->
-            active().getOrNull(base + r)
-                ?.filter { !it.wide2nd }
-                ?.joinToString("") { it.ch.toString() }?.trimEnd().orEmpty()
+            active().getOrNull(base + r)?.let { lineText(it).trimEnd() }.orEmpty()
         }.trimEnd()
     }
 }

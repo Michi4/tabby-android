@@ -56,8 +56,12 @@ the same key. Never commit keystores or passwords (both live outside git).
   `opencode` and friends, adaptive viewport (buffer + server pty follow font,
   key rows, keyboard, fullscreen and rotation via SIGWINCH), fullscreen mode
   (screen only; keyboard + key rows appear on tap), VT100/ANSI colors, cursor,
-  follow-output, font size 1–256sp, swipe-animated tabs, copy line/screen,
-  paste, clear, TOFU host-key accept dialog.
+  follow-output, font size 1–256sp, pinch-to-zoom, swipe-animated tabs,
+  history suggestions + macros, find in scrollback (1k–50k lines, survives
+  restarts), tappable links, copy line/screen, paste, clear, TOFU host-key
+  accept dialog.
+- **Privacy**: screenshots blocked by default, optional full app lock
+  (biometrics/device PIN on every launch), secrets encrypted via Keystore.
 - **Demo shell**: try the terminal with no server — `Terminal → + → Try the demo shell`
   runs an on-device shell for basic commands (full-screen TUIs need real SSH).
 - **SSH keys**: import PEM or generate RSA-3072 in-app (public key shown for
@@ -99,7 +103,7 @@ Never commit real tokens. The app never logs tokens/passwords/keys.
 ./gradlew :app:connectedDebugAndroidTest  # needs a phone plugged in
 ```
 
-150 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
+161 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
 folder-tree (nesting, orphans, cycles), terminal buffer (incl. alt-screen,
 margins, erase/insert/delete, DSR, split UTF-8, wide columns) + key bytes + one-shot
 modifier mappings + demo-shell line discipline, vault format errors, known_hosts

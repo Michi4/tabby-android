@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import at.websters.tabbyandroid.data.ssh.KNOWN_HOSTS_NAME
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 
 /**
  * Sync tokens, SSH passwords and key material live here, encrypted with
@@ -17,6 +19,7 @@ import at.websters.tabbyandroid.data.ssh.KNOWN_HOSTS_NAME
  */
 class SecureTokenStorage(appContext: Context) {
     private val app = appContext.applicationContext
+    private val json = Json { ignoreUnknownKeys = true }
 
     private val prefs: SharedPreferences by lazy {
         try {
@@ -108,5 +111,37 @@ class SecureTokenStorage(appContext: Context) {
     /** Removes a remembered vault passphrase (call on account delete). */
     fun removeVaultPassphrase(accountId: String) {
         prefs.edit().remove("vault_pw_$accountId").apply()
+    }
+
+    /**
+     * Command history + macros, encrypted like every other secret (commands
+     * routinely embed passwords/tokens; see [isSensitiveCommand] pre-filter).
+     */
+    fun getCommandHistory(): List<CmdEntry> =
+        prefs.getString("cmd_history_json", null)?.let { raw ->
+            runCatching { json.decodeFromString(ListSerializer(CmdEntry.serializer()), raw) }
+                .getOrDefault(emptyList())
+        } ?: emptyList()
+
+    fun saveCommandHistory(history: List<CmdEntry>) {
+        prefs.edit()
+            .putString("cmd_history_json", json.encodeToString(ListSerializer(CmdEntry.serializer()), history))
+            .apply()
+    }
+
+    fun clearCommandHistory() {
+        prefs.edit().remove("cmd_history_json").apply()
+    }
+
+    fun getMacros(): List<Macro> =
+        prefs.getString("macros_json", null)?.let { raw ->
+            runCatching { json.decodeFromString(ListSerializer(Macro.serializer()), raw) }
+                .getOrDefault(emptyList())
+        } ?: emptyList()
+
+    fun saveMacros(macros: List<Macro>) {
+        prefs.edit()
+            .putString("macros_json", json.encodeToString(ListSerializer(Macro.serializer()), macros))
+            .apply()
     }
 }

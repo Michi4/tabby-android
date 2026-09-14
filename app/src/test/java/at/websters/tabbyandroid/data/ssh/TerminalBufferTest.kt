@@ -250,6 +250,31 @@ class TerminalBufferTest {
         assertEquals(5, b.snapshot().cursorCol)
     }
 
+    @Test fun searchFindsLines() {
+        val b = TerminalBuffer(cols = 20, rows = 5)
+        b.feed("hello world\r\nfoo\r\nHELLO again".toByteArray())
+        assertEquals(listOf(0, 2), b.searchLines("hello"))
+        assertEquals(listOf(1), b.searchLines("FOO"))
+        assertTrue(b.searchLines("").isEmpty())
+        assertTrue(b.searchLines("zzz").isEmpty())
+    }
+
+    @Test fun lastLinesDumpsTail() {
+        val b = TerminalBuffer(cols = 20, rows = 5)
+        b.feed("one\r\ntwo\r\nthree".toByteArray())
+        assertEquals(listOf("one", "two", "three", "", ""), b.lastLines(5))
+        assertEquals(listOf("", ""), b.lastLines(2).map { it })
+    }
+
+    @Test fun maxScrollbackTrims() {
+        val b = TerminalBuffer(cols = 20, rows = 5, maxScrollback = 2000)
+        repeat(5) { b.feed("x\r\n".toByteArray()) }
+        b.updateMaxScrollback(1000)
+        assertEquals(1000, b.maxScrollback)
+        b.updateMaxScrollback(1) // clamped, never below 1000
+        assertEquals(1000, b.maxScrollback)
+    }
+
     @Test fun resizeNoopKeepsVersion() {
         val b = TerminalBuffer(cols = 20, rows = 5)
         b.feed("hi".toByteArray())

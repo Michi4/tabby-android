@@ -87,4 +87,13 @@ class TerminalKeysTest {
         assertEquals(ModMode.LOCKED, nextModMode(ModMode.ONE_SHOT))
         assertEquals(ModMode.OFF, nextModMode(ModMode.LOCKED))
     }
+
+    @Test fun findLinksTrimsPunctuation() {
+        val found = findLinks("see https://example.com/x., then (http://h.t/y)!")
+        assertEquals(2, found.size)
+        assertEquals("https://example.com/x", found[0].second)
+        assertEquals("http://h.t/y", found[1].second)
+        assertTrue(findLinks("no links here").isEmpty())
+        assertTrue(findLinks("ssh://ignored-scheme").isEmpty())
+    }
 }

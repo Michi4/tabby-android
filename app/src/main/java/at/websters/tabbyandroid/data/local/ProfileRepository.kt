@@ -27,6 +27,11 @@ object UiPrefsDefaults {
     const val FOLLOW = true
     const val KEY_ROWS = 3
     const val FULLSCREEN = false
+    const val PINCH_ZOOM = true
+    const val SUGGESTIONS = true
+    const val SCROLLBACK = 5000
+    /** Cycler options for the scrollback setting. */
+    val SCROLLBACK_OPTIONS = listOf(1000, 2000, 5000, 10000, 50000)
     /**
      * Practically unlimited (min 1 only guards against invalid zero/negative
      * sizes that crash text layout; 256sp already fills the screen).
@@ -42,12 +47,17 @@ data class UiPrefs(
     val keyRows: Int = UiPrefsDefaults.KEY_ROWS,
     val fullscreen: Boolean = UiPrefsDefaults.FULLSCREEN,
     val keyLayout: KeyLayout = KeyLayout(),
+    val pinchZoom: Boolean = UiPrefsDefaults.PINCH_ZOOM,
+    val suggestions: Boolean = UiPrefsDefaults.SUGGESTIONS,
+    val scrollback: Int = UiPrefsDefaults.SCROLLBACK,
 )
 
 /** Clampers (pure, unit-tested): prefs storage can hold anything. */
 fun sanitizeFontSize(sizeSp: Int): Int = sizeSp.coerceIn(UiPrefsDefaults.FONT_MIN, UiPrefsDefaults.FONT_MAX)
 
 fun sanitizeKeyRows(rows: Int): Int = rows.coerceIn(0, 4)
+
+fun sanitizeScrollback(n: Int): Int = n.coerceIn(1000, 50000)
 
 /**
  * Single DataStore for sync accounts + cached + manual profiles.
@@ -67,11 +77,16 @@ class ProfileRepository(private val appContext: Context) {
         private val KEY_COLLAPSED = stringPreferencesKey("collapsed_json")
         private val KEY_GROUPS = stringPreferencesKey("groups_json")
         private val KEY_ALLOW_SCREEN = booleanPreferencesKey("allow_screen_capture")
+        private val KEY_APP_LOCK = booleanPreferencesKey("app_lock")
         private val KEY_UI_FONT = intPreferencesKey("ui_font_size")
         private val KEY_UI_FOLLOW = booleanPreferencesKey("ui_follow")
         private val KEY_UI_ROWS = intPreferencesKey("ui_key_rows")
         private val KEY_UI_FULLSCREEN = booleanPreferencesKey("ui_fullscreen")
         private val KEY_UI_LAYOUT = stringPreferencesKey("ui_key_layout_json")
+        private val KEY_UI_PINCH = booleanPreferencesKey("ui_pinch_zoom")
+        private val KEY_UI_SUGGEST = booleanPreferencesKey("ui_suggestions")
+        private val KEY_UI_SCROLLBACK = intPreferencesKey("ui_scrollback")
+        private val KEY_TAB_SCROLLBACK = stringPreferencesKey("open_tabs_scrollback_json")
         private val KEY_VAULT_LOCK = stringPreferencesKey("vault_lock_json")
         private val KEY_VAULT_SEALED = stringPreferencesKey("vault_sealed_json")
         private val KEY_OPEN_TABS = stringPreferencesKey("open_tabs_json")
@@ -91,6 +106,18 @@ class ProfileRepository(private val appContext: Context) {
 
     suspend fun setAllowScreenCapture(allow: Boolean) {
         appContext.tabbyStore.edit { it[KEY_ALLOW_SCREEN] = allow }
+    }
+
+    /**
+     * App lock (biometrics or device PIN on every foregrounding).
+     * Default off; unlocking your SSH keys warrants opting in.
+     */
+    val appLock: Flow<Boolean> = appContext.tabbyStore.data.map {
+        it[KEY_APP_LOCK] ?: false
+    }
+
+    suspend fun setAppLock(locked: Boolean) {
+        appContext.tabbyStore.edit { it[KEY_APP_LOCK] = locked }
     }
 
     /**
@@ -114,6 +141,18 @@ class ProfileRepository(private val appContext: Context) {
         it[KEY_UI_FULLSCREEN] ?: UiPrefsDefaults.FULLSCREEN
     }
 
+    val uiPinchZoom: Flow<Boolean> = appContext.tabbyStore.data.map {
+        it[KEY_UI_PINCH] ?: UiPrefsDefaults.PINCH_ZOOM
+    }
+
+    val uiSuggestions: Flow<Boolean> = appContext.tabbyStore.data.map {
+        it[KEY_UI_SUGGEST] ?: UiPrefsDefaults.SUGGESTIONS
+    }
+
+    val uiScrollback: Flow<Int> = appContext.tabbyStore.data.map {
+        sanitizeScrollback(it[KEY_UI_SCROLLBACK] ?: UiPrefsDefaults.SCROLLBACK)
+    }
+
     val uiKeyLayout: Flow<KeyLayout> = appContext.tabbyStore.data.map {
         it[KEY_UI_LAYOUT]?.let { raw ->
             runCatching { sanitizeKeyLayout(json.decodeFromString(KeyLayout.serializer(), raw)) }
@@ -135,6 +174,18 @@ class ProfileRepository(private val appContext: Context) {
 
     suspend fun setUiFullscreen(fullscreen: Boolean) {
         appContext.tabbyStore.edit { it[KEY_UI_FULLSCREEN] = fullscreen }
+    }
+
+    suspend fun setUiPinchZoom(enabled: Boolean) {
+        appContext.tabbyStore.edit { it[KEY_UI_PINCH] = enabled }
+    }
+
+    suspend fun setUiSuggestions(enabled: Boolean) {
+        appContext.tabbyStore.edit { it[KEY_UI_SUGGEST] = enabled }
+    }
+
+    suspend fun setUiScrollback(n: Int) {
+        appContext.tabbyStore.edit { it[KEY_UI_SCROLLBACK] = sanitizeScrollback(n) }
     }
 
     suspend fun setUiKeyLayout(layout: KeyLayout) {
@@ -539,6 +590,32 @@ class ProfileRepository(private val appContext: Context) {
                 json.decodeFromString(ListSerializer(SshProfile.serializer()), raw)
             }
             it[KEY_OPEN_TABS] = json.encodeToString(ListSerializer(SshProfile.serializer()), profiles.take(20))
+        }
+    }
+
+    /**
+     * Last visible lines per open tab (plain text, capped) so a restored tab
+     * reopens with its recent history after process death. Live tabs keep
+     * their full buffer; this is only the restore seed.
+     */
+    val openTabScrollback: Flow<Map<String, List<String>>> = appContext.tabbyStore.data.map {
+        it[KEY_TAB_SCROLLBACK]?.let { raw ->
+            runCatching {
+                json.decodeFromString(MapSerializer(String.serializer(), ListSerializer(String.serializer())), raw)
+            }.getOrDefault(emptyMap())
+        } ?: emptyMap()
+    }
+
+    suspend fun saveOpenTabScrollback(linesByProfile: Map<String, List<String>>) {
+        val capped = linesByProfile.entries.take(10)
+            .associate { (k, v) -> k to v.takeLast(200) }
+        appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_TAB_SCROLLBACK) { raw ->
+                json.decodeFromString(MapSerializer(String.serializer(), ListSerializer(String.serializer())), raw)
+            }
+            it[KEY_TAB_SCROLLBACK] = json.encodeToString(
+                MapSerializer(String.serializer(), ListSerializer(String.serializer())), capped
+            )
         }
     }
 }

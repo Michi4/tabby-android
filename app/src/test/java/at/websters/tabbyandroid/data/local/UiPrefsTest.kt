@@ -10,6 +10,9 @@ class UiPrefsTest {
         assertEquals(3, UiPrefs().keyRows)
         assertEquals(false, UiPrefs().fullscreen)
         assertEquals(KeyLayout(), UiPrefs().keyLayout)
+        assertEquals(true, UiPrefs().pinchZoom)
+        assertEquals(true, UiPrefs().suggestions)
+        assertEquals(5000, UiPrefs().scrollback)
     }
 
     @Test fun fontClamped() {
@@ -26,5 +29,11 @@ class UiPrefsTest {
         assertEquals(0, sanitizeKeyRows(-1))
         assertEquals(4, sanitizeKeyRows(7))
         assertEquals(2, sanitizeKeyRows(2))
+    }
+
+    @Test fun scrollbackClamped() {
+        assertEquals(1000, sanitizeScrollback(0))
+        assertEquals(50000, sanitizeScrollback(999999))
+        assertEquals(5000, sanitizeScrollback(5000))
     }
 }

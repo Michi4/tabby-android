@@ -13,6 +13,8 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -44,6 +46,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Keyboard
@@ -51,12 +54,15 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.LinkOff
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TextDecrease
 import androidx.compose.material.icons.filled.TextIncrease
 import androidx.compose.material.icons.filled.VerticalAlignBottom
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -99,7 +105,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -131,6 +139,7 @@ import at.websters.tabbyandroid.ui.state.TerminalTabsViewModel
 import at.websters.tabbyandroid.ui.theme.statusColor
 import at.websters.tabbyandroid.ui.theme.statusLabel
 import at.websters.tabbyandroid.ui.theme.termColor
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 internal const val ESC = "\u001B"
@@ -407,9 +416,19 @@ private fun TerminalTabBody(
     }
     // post-submit IME replay guard (consumed by the next change, if any)
     var suppressReplay by remember(tab.id) { mutableStateOf<String?>(null) }
+    var showMacros by remember { mutableStateOf(false) }
+    val histTick by tabsVm.historyTick.collectAsState()
+    // find-in-scrollback state
+    var searching by remember { mutableStateOf(false) }
+    var query by remember(tab.id) { mutableStateOf("") }
+    var matchSel by remember(tab.id) { mutableIntStateOf(0) }
     val scroll = rememberScrollState()
 
     val snapshot = remember(version, tab.id) { tab.conn.buffer.snapshot() }
+    // scrollback cap follows Settings (live)
+    LaunchedEffect(prefs.scrollback, tab.id) {
+        tab.conn.buffer.updateMaxScrollback(prefs.scrollback)
+    }
     // stick to bottom only while the user is already near it: reading
     // scrolled-up history must never yank, and fitting content never jumps
     val stickSlopPx = with(LocalDensity.current) { 64.dp.toPx() }
@@ -449,9 +468,18 @@ private fun TerminalTabBody(
 
     // Submit (Return): run the line, then clear the sender for the next one.
     fun submitReturn() {
-        suppressReplay = input.text.replace(SENDER_SENTINEL, "")
+        val cmd = input.text.replace(SENDER_SENTINEL, "")
+        suppressReplay = cmd
+        if (cmd.isNotBlank()) tabsVm.recordCommand(cmd)
         sendWithMods("\r")
         input = TextFieldValue(SENDER_SENTINEL, TextRange(SENDER_SENTINEL.length))
+    }
+
+    /** Fills the line for review (suggestion/macro tap) without sending. */
+    fun fillLine(text: String) {
+        // direct state write: onValueChange does NOT fire for programmatic
+        // sets, so nothing is forwarded — the user reviews, edits, submits
+        input = TextFieldValue(SENDER_SENTINEL + text, TextRange(SENDER_SENTINEL.length + text.length))
     }
 
     fun doConnect(pw: String) {
@@ -508,6 +536,19 @@ private fun TerminalTabBody(
                 IconButton(onClick = { tabsVm.setUiFullscreen(true) }) {
                     Icon(Icons.Filled.Fullscreen, "Fullscreen")
                 }
+                IconButton(onClick = { showMacros = true }) {
+                    Icon(Icons.Filled.ElectricBolt, "Macros")
+                }
+                IconButton(onClick = {
+                    searching = !searching
+                    if (!searching) query = ""
+                }) {
+                    Icon(
+                        Icons.Filled.Search, "Find in scrollback",
+                        tint = if (searching) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             IconButton(onClick = {
                 at.websters.tabbyandroid.ui.util.copySensitive(context, tab.conn.buffer.visibleText())
                 Toast.makeText(context, "Screen copied", Toast.LENGTH_SHORT).show()
@@ -522,6 +563,63 @@ private fun TerminalTabBody(
                     IconButton(onClick = { tab.conn.close() }) {
                         Icon(Icons.Filled.LinkOff, "Disconnect", tint = MaterialTheme.colorScheme.error)
                     }
+                }
+            }
+        }
+
+        // ---- find matches (absolute deque indices → visible rows); selection
+        // wraps around, auto-scroll only follows query/selection changes
+        val rows = tab.conn.buffer.rows
+        val matchAbs = remember(version, query, tab.id) {
+            tab.conn.buffer.searchLines(query)
+        }
+        val findTotal = matchAbs.size
+        val selIdx = if (findTotal == 0) 0 else ((matchSel % findTotal) + findTotal) % findTotal
+        val findShown = selIdx
+        val base = tab.conn.buffer.visibleBase()
+        val matchRows = remember(matchAbs, base) {
+            matchAbs.mapNotNull { (it - base).takeIf { r -> r in 0 until rows } }.toSet()
+        }
+        val currentRow = matchAbs.getOrNull(selIdx)?.minus(base)
+            ?.takeIf { it in 0 until rows }
+        val lineHpx = with(LocalDensity.current) { (fontSize + 5).sp.toPx() }
+        LaunchedEffect(query, matchSel) {
+            currentRow?.let { r ->
+                scroll.scrollTo((r * lineHpx).toInt().coerceIn(0, scroll.maxValue))
+            }
+        }
+
+        // ---- find bar (searches the whole buffer incl. scrollback) ----
+        AnimatedVisibility(
+            visible = searching,
+            enter = expandVertically(tween(180)) + fadeIn(tween(180)),
+            exit = shrinkVertically(tween(180)) + fadeOut(tween(180)),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it; matchSel = 0 },
+                    label = { Text("Find in scrollback") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                )
+                Text(
+                    if (findTotal == 0) "0/0" else "${findShown + 1}/$findTotal",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                IconButton(onClick = { matchSel = matchSel - 1 }) {
+                    Icon(Icons.Filled.KeyboardArrowUp, "Previous match")
+                }
+                IconButton(onClick = { matchSel = matchSel + 1 }) {
+                    Icon(Icons.Filled.KeyboardArrowDown, "Next match")
+                }
+                IconButton(onClick = { searching = false; query = "" }) {
+                    Icon(Icons.Filled.Close, "Close search")
                 }
             }
         }
@@ -554,13 +652,21 @@ private fun TerminalTabBody(
                 tab.conn.buffer.resize(viewCols, viewRows)
                 tab.conn.setPtySize(viewCols, viewRows)
             }
-            val rows = tab.conn.buffer.rows
             val primary = MaterialTheme.colorScheme.primary
-            val rendered = remember(version, tab.id, primary) { renderScreen(snapshot, rows, primary) }
+            val rendered = remember(version, tab.id, primary, query, currentRow) {
+                renderScreen(snapshot, rows, primary, matchRows, currentRow ?: -1)
+            }
+            // pinch-to-zoom font (two fingers only — single-finger tap,
+            // scroll and long-press selection pass through untouched)
+            val pinch = rememberTransformableState { zoomChange, _, _ ->
+                fontSize = ((fontSize * zoomChange).roundToInt())
+                    .coerceIn(UiPrefsDefaults.FONT_MIN, UiPrefsDefaults.FONT_MAX)
+            }
             Column(
                 Modifier.fillMaxSize()
                     .background(Color.Black)
                     .padding(8.dp)
+                    .transformable(pinch, lockRotationOnZoomPan = true, enabled = prefs.pinchZoom)
                     .verticalScroll(scroll)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
@@ -772,6 +878,40 @@ private fun TerminalTabBody(
             }
         }
 
+        // ---- history suggestions (tap a chip to fill the line for review;
+        // frequency-ranked, learned from submitted commands, toggle in Settings)
+        val currentLine = input.text.replace(SENDER_SENTINEL, "")
+        val suggestions = remember(currentLine, histTick) {
+            if (!prefs.suggestions) emptyList()
+            else at.websters.tabbyandroid.data.local.rankSuggestions(tabsVm.loadHistory(), currentLine)
+        }
+        AnimatedVisibility(
+            visible = suggestions.isNotEmpty(),
+            enter = expandVertically(tween(180)) + fadeIn(tween(180)),
+            exit = shrinkVertically(tween(180)) + fadeOut(tween(180)),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                suggestions.forEach { s ->
+                    AssistChip(
+                        onClick = { fillLine(s) },
+                        label = {
+                            Text(
+                                s,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                            )
+                        },
+                    )
+                }
+            }
+        }
+
         // ---- extended keys: ride above the keyboard via IME insets.
         // Row 1 (modifiers + arrows): Esc Tab CTRL ← ↑ ↓ → ALT AltGr —
         // CTRL/ALT/AltGr are one-shot (tap = next key only, double-tap = lock).
@@ -809,6 +949,20 @@ private fun TerminalTabBody(
                 }
             }
         }
+    }
+
+    if (showMacros) {
+        MacrosDialog(
+            tabsVm = tabsVm,
+            onFill = { fillLine(it); showMacros = false },
+            onRun = { cmd ->
+                tab.conn.send(cmd)
+                if (!cmd.endsWith("\n")) tab.conn.send("\r")
+                tabsVm.recordCommand(cmd.trim())
+                showMacros = false
+            },
+            onDismiss = { showMacros = false },
+        )
     }
 
     showHostKey?.let { key ->
@@ -853,6 +1007,23 @@ private fun TerminalTabBody(
 }
 
 /**
+ * URLs in a plain terminal line: (char range in plain text, url).
+ * Trailing punctuation/brackets are trimmed so `see https://x.y/z.` links
+ * exactly the address. Pure logic, unit-tested.
+ */
+internal fun findLinks(text: String): List<Pair<IntRange, String>> {
+    val out = mutableListOf<Pair<IntRange, String>>()
+    val re = Regex("""https?://[^\s)>\]"']+""")
+    for (m in re.findAll(text)) {
+        var end = m.range.last
+        while (end >= m.range.first && text[end] in ".,;:!?") end--
+        if (end < m.range.first) continue
+        out.add((m.range.first..end) to text.substring(m.range.first, end + 1))
+    }
+    return out
+}
+
+/**
  * Renders the terminal screen as styled text (colors + bold + block cursor),
  * which the screen text field displays and the user can select/copy natively.
  */
@@ -860,7 +1031,15 @@ private fun renderScreen(
     snapshot: TerminalBuffer.Snapshot,
     rows: Int,
     primary: androidx.compose.ui.graphics.Color,
+    matchLines: Set<Int> = emptySet(),
+    currentMatch: Int = -1,
 ): AnnotatedString {
+    val linkStyle = TextLinkStyles(
+        style = SpanStyle(
+            color = primary,
+            textDecoration = TextDecoration.Underline,
+        )
+    )
     return buildAnnotatedString {
         val visible = snapshot.lines.takeLast(rows)
         visible.forEachIndexed { i, line ->
@@ -870,6 +1049,31 @@ private fun renderScreen(
             var reverse = false
             var underline = false
             var dim = false
+            var segLink: String? = null
+            // plain-text index per cell (wide second-halves share no index)
+            val plainOf = IntArray(line.size) { -1 }
+            var pp = 0
+            line.forEachIndexed { idx, cell ->
+                if (!cell.wide2nd) {
+                    plainOf[idx] = pp
+                    pp++
+                }
+            }
+            val plainLen = pp
+            val links = findLinks(
+                buildString {
+                    line.forEachIndexed { idx, cell ->
+                        if (plainOf[idx] >= 0) append(cell.ch)
+                    }
+                }
+            )
+            fun linkAt(p: Int): String? {
+                if (p < 0) return null
+                for ((range, url) in links) {
+                    if (p in range) return url
+                }
+                return null
+            }
             val sb = StringBuilder()
             fun flush() {
                 if (sb.isNotEmpty()) {
@@ -877,16 +1081,48 @@ private fun renderScreen(
                         if (dim) it.copy(alpha = 0.6f) else it
                     }
                     val bgColor = termColor(bg.coerceIn(0, 7), true)
-                    pushStyle(
-                        SpanStyle(
-                            color = if (reverse) bgColor else fgColor,
-                            background = if (reverse) fgColor else Color.Unspecified,
-                            fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
-                            textDecoration = if (underline) TextDecoration.Underline else null,
+                    val matchBg = when {
+                        i == currentMatch -> primary.copy(alpha = 0.45f)
+                        i in matchLines -> primary.copy(alpha = 0.22f)
+                        else -> Color.Unspecified
+                    }
+                    val useLink = segLink != null
+                    val color = when {
+                        useLink -> primary
+                        reverse -> bgColor
+                        else -> fgColor
+                    }
+                    val background = when {
+                        reverse -> fgColor
+                        matchBg != Color.Unspecified -> matchBg
+                        else -> Color.Unspecified
+                    }
+                    val deco = if (underline || useLink) TextDecoration.Underline else null
+                    if (useLink) {
+                        // base carries bg/weight; the link annotation itself
+                        // carries color + underline (tap opens the URL)
+                        pushStyle(
+                            SpanStyle(
+                                background = background,
+                                fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+                            )
                         )
-                    )
-                    append(sb.toString())
-                    pop()
+                        pushLink(LinkAnnotation.Url(segLink!!, linkStyle))
+                        append(sb.toString())
+                        pop()
+                        pop()
+                    } else {
+                        pushStyle(
+                            SpanStyle(
+                                color = color,
+                                background = background,
+                                fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+                                textDecoration = deco,
+                            )
+                        )
+                        append(sb.toString())
+                        pop()
+                    }
                     sb.clear()
                 }
             }
@@ -898,8 +1134,10 @@ private fun renderScreen(
                     pop()
                     return@forEachIndexed
                 }
+                val cellLink = linkAt(plainOf[idx])
                 if (cell.fg != fg || cell.bg != bg || cell.bold != bold ||
-                    cell.reverse != reverse || cell.underline != underline || cell.dim != dim
+                    cell.reverse != reverse || cell.underline != underline || cell.dim != dim ||
+                    cellLink != segLink
                 ) {
                     flush()
                     fg = cell.fg
@@ -908,6 +1146,7 @@ private fun renderScreen(
                     reverse = cell.reverse
                     underline = cell.underline
                     dim = cell.dim
+                    segLink = cellLink
                 }
                 sb.append(cell.ch)
             }
@@ -982,9 +1221,86 @@ internal fun TerminalKeyRow(
         }
     }
 }
+/**
+ * Saved macros: tap a row to fill the line for review, ▶ to run it
+ * immediately (command + Enter), × to delete. Stored encrypted.
+ */
 @Composable
-internal fun ModChip(label: String, mode: ModMode, onClick: () -> Unit) {
-    val text = when (mode) {
+private fun MacrosDialog(
+    tabsVm: TerminalTabsViewModel,
+    onFill: (String) -> Unit,
+    onRun: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val tick by tabsVm.macrosTick.collectAsState()
+    val macros = remember(tick) { tabsVm.loadMacros() }
+    var name by remember { mutableStateOf("") }
+    var cmd by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Macros") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (macros.isEmpty()) {
+                    Text(
+                        "No macros yet — save a command below, then tap it to fill " +
+                            "the line or ▶ to run it at once.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                macros.forEach { m ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(
+                            Modifier.weight(1f).clickable { onFill(m.command) },
+                        ) {
+                            Text(m.name, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                m.command,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        IconButton(onClick = { onRun(m.command) }) {
+                            Icon(Icons.Filled.PlayArrow, "Run ${m.name}")
+                        }
+                        IconButton(onClick = { tabsVm.deleteMacro(m.name) }) {
+                            Icon(Icons.Filled.Close, "Delete ${m.name}")
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    label = { Text("Name") }, singleLine = true,
+                )
+                OutlinedTextField(
+                    value = cmd, onValueChange = { cmd = it },
+                    label = { Text("Command") }, singleLine = true,
+                    textStyle = TextStyle(fontFamily = FontFamily.Monospace),
+                )
+                Button(
+                    onClick = {
+                        tabsVm.addMacro(name, cmd)
+                        name = ""
+                        cmd = ""
+                    },
+                    enabled = name.isNotBlank() && cmd.isNotBlank(),
+                ) { Text("Save macro") }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
+}
+
+@Composable
+internal fun ModChip(label: String, mode: ModMode, onClick: () -> Unit) {    val text = when (mode) {
         ModMode.OFF -> label
         ModMode.ONE_SHOT -> "$label•"
         ModMode.LOCKED -> "$label▪"
