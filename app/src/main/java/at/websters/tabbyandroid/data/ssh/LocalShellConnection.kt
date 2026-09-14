@@ -10,6 +10,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /** Profile id prefix for on-device demo tabs (never synced, never uploaded). */
@@ -92,6 +93,8 @@ class DemoLineDiscipline {
 class LocalShellConnection(
     override val profile: SshProfile,
     override val buffer: TerminalBuffer = TerminalBuffer(cols = 80, rows = 24),
+    /** Shell binary (production: Android's sh; tests may point at /bin/sh). */
+    private val shellPath: String = "/system/bin/sh",
 ) : TerminalConnection {
     private val _state = MutableStateFlow(SshState.DISCONNECTED)
     override val state: StateFlow<SshState> = _state
@@ -108,6 +111,15 @@ class LocalShellConnection(
     private var readerJob: Job? = null
     private val discipline = DemoLineDiscipline()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /**
+     * Serializes every send (line assembly + echo + pipe write). Without it,
+     * back-to-back sends (macro run, fill, fast typing) race on the shared
+     * discipline line: a CR can overtake its command (empty submit, command
+     * stuck until the NEXT CR) or chars interleave mid-line. Mutex is FIFO,
+     * so submission order is preserved.
+     */
+    private val sendMutex = kotlinx.coroutines.sync.Mutex()
 
     override suspend fun connect(
         password: String,
@@ -132,7 +144,7 @@ class LocalShellConnection(
     private fun start() {
         _state.value = SshState.CONNECTING
         _status.value = "Starting demo shell…"
-        val pb = ProcessBuilder("/system/bin/sh").redirectErrorStream(true)
+        val pb = ProcessBuilder(shellPath).redirectErrorStream(true)
         pb.environment()["TERM"] = "xterm-256color"
         val p = pb.start()
         proc = p
@@ -167,15 +179,17 @@ class LocalShellConnection(
         val o = stdin ?: return
         if (p.isAlive != true) return
         scope.launch {
-            try {
-                val r = discipline.input(text)
-                if (r.echo.isNotEmpty()) buffer.feed(r.echo, 0, r.echo.size)
-                if (r.procBytes.isNotEmpty()) {
-                    o.write(r.procBytes)
-                    o.flush()
+            sendMutex.withLock {
+                try {
+                    val r = discipline.input(text)
+                    if (r.echo.isNotEmpty()) buffer.feed(r.echo, 0, r.echo.size)
+                    if (r.procBytes.isNotEmpty()) {
+                        o.write(r.procBytes)
+                        o.flush()
+                    }
+                    if (r.eof) runCatching { o.close() }
+                } catch (_: Exception) {
                 }
-                if (r.eof) runCatching { o.close() }
-            } catch (_: Exception) {
             }
         }
     }

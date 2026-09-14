@@ -478,10 +478,13 @@ private fun TerminalTabBody(
         input = TextFieldValue(SENDER_SENTINEL, TextRange(SENDER_SENTINEL.length))
     }
 
-    /** Fills the line for review (suggestion/macro tap) without sending. */
+    /** Fills the line (suggestion/macro tap): transmits immediately, exactly
+     * as if typed fast, so sender text and server line can never diverge.
+     * Direct state write (no onValueChange fire); the user reviews, edits,
+     * then submits normally. */
     fun fillLine(text: String) {
-        // direct state write: onValueChange does NOT fire for programmatic
-        // sets, so nothing is forwarded — the user reviews, edits, submits
+        clearOneShots()
+        for (ch in text) sendTermChar(ch)
         input = TextFieldValue(SENDER_SENTINEL + text, TextRange(SENDER_SENTINEL.length + text.length))
     }
 

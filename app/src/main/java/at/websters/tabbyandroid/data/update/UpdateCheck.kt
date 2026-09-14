@@ -86,25 +86,25 @@ suspend fun checkForUpdate(
     currentVersion: String,
     apiBase: String = "https://api.github.com",
     http: OkHttpClient = defaultHttp(),
-): UpdateState {
-    return try {
+): UpdateState = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    try {
         val req = Request.Builder()
             .url("$apiBase/repos/$OWNER_REPO/releases/latest".trimEnd('/'))
             .header("Accept", "application/vnd.github+json")
             .build()
         http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
-                return if (resp.code == 404) UpdateState.Failed("No releases published yet")
+                return@use if (resp.code == 404) UpdateState.Failed("No releases published yet")
                 else UpdateState.Failed("Update check failed (HTTP ${resp.code})")
             }
             val body = resp.body?.string().orEmpty()
             val rel = runCatching { json.decodeFromString<GhRelease>(body) }.getOrNull()
-                ?: return UpdateState.Failed("Update check failed (bad response)")
-            if (!isNewerThan(rel.tag, currentVersion)) return UpdateState.Current
+                ?: return@use UpdateState.Failed("Update check failed (bad response)")
+            if (!isNewerThan(rel.tag, currentVersion)) return@use UpdateState.Current
             val apk = rel.assets.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
-                ?: return UpdateState.Failed("Latest release has no APK yet")
+                ?: return@use UpdateState.Failed("Latest release has no APK yet")
             val version = parseVersionTag(rel.tag)?.let { (a, b, c) -> "$a.$b.$c" }
-                ?: return UpdateState.Current
+                ?: return@use UpdateState.Current
             UpdateState.Available(
                 ReleaseInfo(version, rel.tag, apk.url, rel.body.orEmpty())
             )
@@ -114,6 +114,7 @@ suspend fun checkForUpdate(
     } catch (e: java.net.SocketTimeoutException) {
         UpdateState.Failed("Update check timed out — try again")
     } catch (e: Exception) {
-        UpdateState.Failed(e.message?.take(160) ?: "Update check failed")
+        // named class (never a bare null message) so failures stay diagnosable
+        UpdateState.Failed((e.message?.take(120) ?: e.javaClass.simpleName).ifBlank { e.javaClass.simpleName })
     }
 }
