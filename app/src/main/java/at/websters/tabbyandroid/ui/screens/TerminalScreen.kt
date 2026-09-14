@@ -17,7 +17,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
@@ -47,6 +47,8 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.TextDecrease
@@ -105,6 +107,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -486,10 +489,10 @@ private fun TerminalTabBody(
                     .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = { keyRows = if (keyRows <= 0) 3 else keyRows - 1 }) {
+            IconButton(onClick = { keyRows = if (keyRows <= 0) 4 else keyRows - 1 }) {
                     Icon(
                         if (keyRows == 0) Icons.Filled.Keyboard else Icons.Filled.KeyboardHide,
-                        "Key rows: $keyRows of 3 (tap to cycle)",
+                        "Key rows: $keyRows (tap to cycle)",
                         tint = if (keyRows == 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
                     )
                 }
@@ -525,7 +528,32 @@ private fun TerminalTabBody(
 
         // ---- screen is OUTPUT ONLY (read-only, selectable); typing goes
         // through the sender bar below, and tapping the screen focuses it.
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        // Viewport measurement (Termius-style): derive the real character
+        // cells from the laid-out size + font, and keep buffer + pty in sync
+        // — so TUIs redraw on font, key-row, keyboard, fullscreen and
+        // rotation changes instead of staying stuck at 80x24.
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            val density = LocalDensity.current
+            val measurer = rememberTextMeasurer()
+            val cellW = remember(fontSize) {
+                measurer.measure(
+                    AnnotatedString("0123456789"),
+                    style = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = fontSize.sp,
+                    ),
+                ).size.width / 10f
+            }.coerceAtLeast(1f)
+            val lineH = with(density) { (fontSize + 5).sp.toPx() }.coerceAtLeast(1f)
+            val pad = with(density) { 16.dp.toPx() }
+            val viewCols = (((with(density) { maxWidth.toPx() } - pad) / cellW).toInt())
+                .coerceIn(20, 300)
+            val viewRows = (((with(density) { maxHeight.toPx() } - pad) / lineH).toInt())
+                .coerceIn(5, 200)
+            LaunchedEffect(viewCols, viewRows, tab.id) {
+                tab.conn.buffer.resize(viewCols, viewRows)
+                tab.conn.setPtySize(viewCols, viewRows)
+            }
             val rows = tab.conn.buffer.rows
             val primary = MaterialTheme.colorScheme.primary
             val rendered = remember(version, tab.id, primary) { renderScreen(snapshot, rows, primary) }
@@ -759,23 +787,25 @@ private fun TerminalTabBody(
             exit = shrinkVertically(tween(220)) + fadeOut(tween(220)),
         ) {
             Column(Modifier.fillMaxWidth().padding(bottom = 8.dp).imePadding()) {
-                if (keyRows >= 1) {
-                    ModNavRow(
+                // rows come from Settings → Key layout (first keyRows of them);
+                // modifiers are one-shot (tap = next key, double-tap = lock)
+                prefs.keyLayout.rows.take(keyRows.coerceIn(0, 4)).forEach { ids ->
+                    TerminalKeyRow(
+                        ids = ids,
+                        spacingDp = prefs.keyLayout.spacingDp,
                         ctrlMode = ctrlMode,
                         altMode = altMode,
                         altGrMode = altGrMode,
-                        onCtrl = { ctrlMode = nextModMode(ctrlMode) },
-                        onAlt = { altMode = nextModMode(altMode) },
-                        onAltGr = { altGrMode = nextModMode(altGrMode) },
+                        onModifier = { which ->
+                            when (which) {
+                                "ctrl" -> ctrlMode = nextModMode(ctrlMode)
+                                "alt" -> altMode = nextModMode(altMode)
+                                else -> altGrMode = nextModMode(altGrMode)
+                            }
+                        },
                         onSend = ::sendWithMods,
                         onSubmitReturn = ::submitReturn,
                     )
-                }
-                if (keyRows >= 2) {
-                    KeyRow(EDIT_SYMBOL_KEYS) { seq -> if (seq == "\r") submitReturn() else sendWithMods(seq) }
-                }
-                if (keyRows >= 3) {
-                    KeyRow(FN_KEYS) { sendWithMods(it) }
                 }
             }
         }
@@ -893,63 +923,67 @@ private fun renderScreen(
     }
 }
 
+/**
+ * One customizable key row (Settings → Key layout reuses this for the live
+ * preview). Modifier ids render as one-shot chips, up/down as arrow icons
+ * (content-described, no text needed), Enter submits, everything else sends
+ * its byte sequence. Unknown ids are skipped, never crash.
+ */
 @Composable
-private fun KeyRow(keys: List<Pair<String, String>>, onSend: (String) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-            .padding(horizontal = 4.dp),
-    ) {
-        keys.forEach { (label, seq) ->
-            TextButton(
-                onClick = { onSend(seq) },
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-            ) {
-                Text(label, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ModNavRow(
+internal fun TerminalKeyRow(
+    ids: List<String>,
+    spacingDp: Int,
     ctrlMode: ModMode,
     altMode: ModMode,
     altGrMode: ModMode,
-    onCtrl: () -> Unit,
-    onAlt: () -> Unit,
-    onAltGr: () -> Unit,
+    onModifier: (String) -> Unit,
     onSend: (String) -> Unit,
     onSubmitReturn: () -> Unit,
 ) {
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
             .padding(horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(spacingDp.coerceIn(0, 16).dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TOP_ROW_KEYS.forEach { (label, seq) ->
-            TextButton(
-                onClick = { onSend(seq) },
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-            ) {
-                Text(label, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+        ids.forEach { id ->
+            when (id) {
+                "ctrl" -> ModChip(label = "Ctrl", mode = ctrlMode, onClick = { onModifier("ctrl") })
+                "alt" -> ModChip(label = "Alt", mode = altMode, onClick = { onModifier("alt") })
+                "altgr" -> ModChip(label = "AltGr", mode = altGrMode, onClick = { onModifier("altgr") })
+                "up" -> IconButton(
+                    onClick = { at.websters.tabbyandroid.data.local.keySeqFor("up")?.let(onSend) },
+                    modifier = Modifier.size(36.dp),
+                ) { Icon(Icons.Filled.KeyboardArrowUp, "Up") }
+                "down" -> IconButton(
+                    onClick = { at.websters.tabbyandroid.data.local.keySeqFor("down")?.let(onSend) },
+                    modifier = Modifier.size(36.dp),
+                ) { Icon(Icons.Filled.KeyboardArrowDown, "Down") }
+                "enter" -> TextButton(
+                    onClick = onSubmitReturn,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                ) { Text("Enter", fontFamily = FontFamily.Monospace, fontSize = 13.sp) }
+                else -> {
+                    val seq = at.websters.tabbyandroid.data.local.keySeqFor(id)
+                    if (seq != null) {
+                        TextButton(
+                            onClick = { onSend(seq) },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                at.websters.tabbyandroid.data.local.keyLabelFor(id),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
+                }
             }
         }
-        ModChip(label = "Ctrl", mode = ctrlMode, onClick = onCtrl)
-        NAV_ARROWS.forEach { (label, seq) ->
-            TextButton(
-                onClick = { onSend(seq) },
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-            ) {
-                Text(label, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-            }
-        }
-        ModChip(label = "Alt", mode = altMode, onClick = onAlt)
-        ModChip(label = "AltGr", mode = altGrMode, onClick = onAltGr)
     }
 }
-
 @Composable
-private fun ModChip(label: String, mode: ModMode, onClick: () -> Unit) {
+internal fun ModChip(label: String, mode: ModMode, onClick: () -> Unit) {
     val text = when (mode) {
         ModMode.OFF -> label
         ModMode.ONE_SHOT -> "$label•"

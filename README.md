@@ -47,15 +47,17 @@ the same key. Never commit keystores or passwords (both live outside git).
   pins or deletes. Open tabs survive backgrounding and process death as
   one-tap reconnect tabs (creds reload from encrypted storage).
 - **Terminal**: browser-style compact tabs, tap-to-type straight into SSH
-  (system keyboard, no send button), top key row `Esc Tab Ctrl ← ↑ ↓ → Alt AltGr`
-  with one-shot modifiers (tap = next key only, double-tap = lock, e.g. tap
-  Ctrl then `b`), row 2 `Enter` + editing + symbols, row 3 `F1–F12`,
-  full xterm emulation (alternate screen, scroll margins, insert/delete
-  lines/chars, erase variants, cursor save/restore/show-hide, DSR replies,
-  reverse/underline/dim, split-sequence-safe UTF-8) for `btop`/`tmux`/`vim`/
-  `opencode` and friends, fullscreen mode (screen only; keyboard + key rows
-  appear on tap), VT100/ANSI colors, cursor, follow-output, font size 1–256sp,
-  swipe-animated tabs, copy line/screen, paste, clear, TOFU host-key accept dialog.
+  (system keyboard, no send button), fully customizable key rows (order,
+  position, rows, spacing — with live preview in Settings; `↑`/`↓` as arrow
+  icons, one-shot `Ctrl`/`Alt`/`AltGr` toggles), full xterm emulation
+  (alternate screen, scroll margins, insert/delete lines/chars, erase variants,
+  cursor save/restore/show-hide, DSR replies, reverse/underline/dim,
+  split-sequence-safe UTF-8, CJK/emoji columns) for `btop`/`tmux`/`vim`/
+  `opencode` and friends, adaptive viewport (buffer + server pty follow font,
+  key rows, keyboard, fullscreen and rotation via SIGWINCH), fullscreen mode
+  (screen only; keyboard + key rows appear on tap), VT100/ANSI colors, cursor,
+  follow-output, font size 1–256sp, swipe-animated tabs, copy line/screen,
+  paste, clear, TOFU host-key accept dialog.
 - **Demo shell**: try the terminal with no server — `Terminal → + → Try the demo shell`
   runs an on-device shell for basic commands (full-screen TUIs need real SSH).
 - **SSH keys**: import PEM or generate RSA-3072 in-app (public key shown for
@@ -97,7 +99,7 @@ Never commit real tokens. The app never logs tokens/passwords/keys.
 ./gradlew :app:connectedDebugAndroidTest  # needs a phone plugged in
 ```
 
-134 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
+150 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
 folder-tree (nesting, orphans, cycles), terminal buffer (incl. alt-screen,
 margins, erase/insert/delete, DSR, split UTF-8, wide columns) + key bytes + one-shot
 modifier mappings + demo-shell line discipline, vault format errors, known_hosts

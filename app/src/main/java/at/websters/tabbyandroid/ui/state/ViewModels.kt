@@ -286,9 +286,9 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
      * that composes before the first DataStore emission lands.
      */
     val uiPrefs: StateFlow<at.websters.tabbyandroid.data.local.UiPrefs> = combine(
-        repo.uiFontSize, repo.uiFollow, repo.uiKeyRows, repo.uiFullscreen,
-    ) { fontSize, follow, keyRows, fullscreen ->
-        at.websters.tabbyandroid.data.local.UiPrefs(fontSize, follow, keyRows, fullscreen)
+        repo.uiFontSize, repo.uiFollow, repo.uiKeyRows, repo.uiFullscreen, repo.uiKeyLayout,
+    ) { fontSize, follow, keyRows, fullscreen, keyLayout ->
+        at.websters.tabbyandroid.data.local.UiPrefs(fontSize, follow, keyRows, fullscreen, keyLayout)
     }.stateIn(
         viewModelScope, SharingStarted.Eagerly,
         at.websters.tabbyandroid.data.local.UiPrefs(),
@@ -308,6 +308,10 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setUiFullscreen(fullscreen: Boolean) {
         viewModelScope.launch { repo.setUiFullscreen(fullscreen) }
+    }
+
+    fun setUiKeyLayout(layout: at.websters.tabbyandroid.data.local.KeyLayout) {
+        viewModelScope.launch { repo.setUiKeyLayout(layout) }
     }
 
     init {

@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.4.2 (versionCode 7)
+
+### Adaptive viewport (redraws on every geometry change)
+- The terminal measures its real character cells and resizes buffer + server
+  pty together (SIGWINCH), so `btop`/`opencode` redraw on font size, key-row,
+  keyboard, fullscreen and rotation changes instead of staying stuck at 80x24.
+  New channels open at the current size; content survives resizes.
+- Fixed a device-crashing `List.removeLast()` (Java 21 API absent on Android)
+  in the shrink path — caught by the new tests before it ever shipped.
+
+### Customizable key rows (Settings → Terminal)
+- Any order, any position, 1–4 rows: move keys with ‹ ›, remove with ×, add
+  unused keys from the picker (no duplicates), add/remove rows, reset.
+- `↑`/`↓` render as arrow icons (content-described); everything else keeps
+  its text label; unknown ids are skipped, never crash.
+- Key spacing slider (0–16dp) with a live preview using the real row
+  renderer — what you see is what the terminal shows.
+
 ## 1.4.1 (versionCode 6)
 
 ### Terminal rendering (the opencode/btop wrapping bug)

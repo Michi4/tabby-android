@@ -41,12 +41,13 @@ data class UiPrefs(
     val follow: Boolean = UiPrefsDefaults.FOLLOW,
     val keyRows: Int = UiPrefsDefaults.KEY_ROWS,
     val fullscreen: Boolean = UiPrefsDefaults.FULLSCREEN,
+    val keyLayout: KeyLayout = KeyLayout(),
 )
 
 /** Clampers (pure, unit-tested): prefs storage can hold anything. */
 fun sanitizeFontSize(sizeSp: Int): Int = sizeSp.coerceIn(UiPrefsDefaults.FONT_MIN, UiPrefsDefaults.FONT_MAX)
 
-fun sanitizeKeyRows(rows: Int): Int = rows.coerceIn(0, 3)
+fun sanitizeKeyRows(rows: Int): Int = rows.coerceIn(0, 4)
 
 /**
  * Single DataStore for sync accounts + cached + manual profiles.
@@ -70,6 +71,7 @@ class ProfileRepository(private val appContext: Context) {
         private val KEY_UI_FOLLOW = booleanPreferencesKey("ui_follow")
         private val KEY_UI_ROWS = intPreferencesKey("ui_key_rows")
         private val KEY_UI_FULLSCREEN = booleanPreferencesKey("ui_fullscreen")
+        private val KEY_UI_LAYOUT = stringPreferencesKey("ui_key_layout_json")
         private val KEY_VAULT_LOCK = stringPreferencesKey("vault_lock_json")
         private val KEY_VAULT_SEALED = stringPreferencesKey("vault_sealed_json")
         private val KEY_OPEN_TABS = stringPreferencesKey("open_tabs_json")
@@ -112,6 +114,13 @@ class ProfileRepository(private val appContext: Context) {
         it[KEY_UI_FULLSCREEN] ?: UiPrefsDefaults.FULLSCREEN
     }
 
+    val uiKeyLayout: Flow<KeyLayout> = appContext.tabbyStore.data.map {
+        it[KEY_UI_LAYOUT]?.let { raw ->
+            runCatching { sanitizeKeyLayout(json.decodeFromString(KeyLayout.serializer(), raw)) }
+                .getOrDefault(KeyLayout())
+        } ?: KeyLayout()
+    }
+
     suspend fun setUiFontSize(sizeSp: Int) {
         appContext.tabbyStore.edit { it[KEY_UI_FONT] = sanitizeFontSize(sizeSp) }
     }
@@ -126,6 +135,16 @@ class ProfileRepository(private val appContext: Context) {
 
     suspend fun setUiFullscreen(fullscreen: Boolean) {
         appContext.tabbyStore.edit { it[KEY_UI_FULLSCREEN] = fullscreen }
+    }
+
+    suspend fun setUiKeyLayout(layout: KeyLayout) {
+        val safe = sanitizeKeyLayout(layout)
+        appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_UI_LAYOUT) { raw ->
+                json.decodeFromString(KeyLayout.serializer(), raw)
+            }
+            it[KEY_UI_LAYOUT] = json.encodeToString(KeyLayout.serializer(), safe)
+        }
     }
 
     val accounts: Flow<List<SyncAccount>> = appContext.tabbyStore.data.map {

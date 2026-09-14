@@ -9,6 +9,7 @@ class UiPrefsTest {
         assertEquals(true, UiPrefs().follow)
         assertEquals(3, UiPrefs().keyRows)
         assertEquals(false, UiPrefs().fullscreen)
+        assertEquals(KeyLayout(), UiPrefs().keyLayout)
     }
 
     @Test fun fontClamped() {
@@ -23,7 +24,7 @@ class UiPrefsTest {
 
     @Test fun rowsClamped() {
         assertEquals(0, sanitizeKeyRows(-1))
-        assertEquals(3, sanitizeKeyRows(7))
+        assertEquals(4, sanitizeKeyRows(7))
         assertEquals(2, sanitizeKeyRows(2))
     }
 }

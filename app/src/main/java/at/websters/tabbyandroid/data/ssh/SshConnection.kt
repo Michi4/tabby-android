@@ -56,6 +56,13 @@ class SshConnection(
     private var readerJob: Job? = null
     /** Our end of the stdin pipe (canonical JSch shell input pattern). */
     private var shellInput: java.io.PipedOutputStream? = null
+    /**
+     * Last known viewport size. The UI keeps this current (font, key rows,
+     * keyboard, fullscreen, rotation) so a NEW channel opens at the right
+     * size and a LIVE channel gets SIGWINCH via [setPtySize].
+     */
+    @Volatile private var ptyCols = 80
+    @Volatile private var ptyRows = 24
 
     override suspend fun connect(
         password: String,
@@ -141,7 +148,7 @@ class SshConnection(
             throw e
         }
         val ch = s.openChannel("shell") as ChannelShell
-        ch.setPtyType("xterm-256color", 80, 24, 0, 0)
+        ch.setPtyType("xterm-256color", ptyCols, ptyRows, 0, 0)
         // canonical stdin wiring: our pipe feeds the remote shell (getOutputStream
         // is unreliable across JSch versions for interactive shells)
         val pipeIn = java.io.PipedInputStream(64 * 1024)
@@ -234,10 +241,15 @@ class SshConnection(
 
     override fun sendKey(key: String) = send(key)
 
-    /** Resize the remote pty (e.g. after rotation / font change). Best-effort. */
+    /**
+     * Resize the remote pty (SIGWINCH; TUIs redraw). Safe to call before
+     * connect (sizes the next channel) or while connected (live resize).
+     */
     override fun setPtySize(cols: Int, rows: Int) {
+        ptyCols = cols.coerceIn(20, 300)
+        ptyRows = rows.coerceIn(10, 200)
         try {
-            channel?.setPtySize(cols.coerceIn(20, 300), rows.coerceIn(10, 200), 0, 0)
+            channel?.setPtySize(ptyCols, ptyRows, 0, 0)
         } catch (_: Exception) {
         }
     }

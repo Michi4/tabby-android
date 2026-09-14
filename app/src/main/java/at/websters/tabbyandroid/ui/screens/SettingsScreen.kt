@@ -1,21 +1,39 @@
 package at.websters.tabbyandroid.ui.screens
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,6 +50,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import at.websters.tabbyandroid.BuildConfig
+import at.websters.tabbyandroid.data.local.KeyLayout
+import at.websters.tabbyandroid.data.local.allKeyIds
+import at.websters.tabbyandroid.data.local.defaultKeyRows
+import at.websters.tabbyandroid.data.local.keyLabelFor
 import at.websters.tabbyandroid.ui.state.ConnectionsViewModel
 import at.websters.tabbyandroid.ui.state.SyncAccountsViewModel
 import at.websters.tabbyandroid.ui.state.TerminalTabsViewModel
@@ -54,6 +76,7 @@ fun SettingsScreen(
         PrivacyCard(accounts)
         SectionHeader("Terminal")
         TerminalPrefsCard(tabs)
+        KeyLayoutCard(tabs)
         SectionHeader("Sync")
         SyncSection(accounts, connections)
         SectionHeader("About")
@@ -174,16 +197,17 @@ private fun TerminalPrefsCard(tabsVm: TerminalTabsViewModel) {
                 Column(Modifier.weight(1f).padding(end = 12.dp)) {
                     Text("Key rows", style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        "Row 1: Esc Tab Ctrl ←↑↓→ Alt AltGr",
+                        "Visible rows of your custom layout below",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 OutlinedButton(onClick = {
-                    tabsVm.setUiKeyRows(if (prefs.keyRows <= 0) 3 else prefs.keyRows - 1)
+                    tabsVm.setUiKeyRows(if (prefs.keyRows <= 0) 4 else prefs.keyRows - 1)
                 }) {
                     Text(
                         when (prefs.keyRows) {
+                            4 -> "4 rows"
                             3 -> "3 rows"
                             2 -> "2 rows"
                             1 -> "1 row"
@@ -248,6 +272,183 @@ private fun AboutCard() {
             )
             TextButton(onClick = { uriHandler.openUri("https://github.com/Michi4/tabby-android") }) {
                 Text("Source code (MIT)")
+            }
+        }
+    }
+}
+
+/**
+ * Key-layout editor with a live preview. Every change writes straight to
+ * prefs (sanitized), so the preview — the real row renderer — always shows
+ * exactly what the terminal will show. Reorder with ‹ ›, remove with ×,
+ * add unused keys via the picker, add/remove rows, drag the spacing slider.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun KeyLayoutCard(tabsVm: TerminalTabsViewModel) {
+    val prefs by tabsVm.uiPrefs.collectAsState()
+    val layout = prefs.keyLayout
+    var selRow by remember { mutableStateOf(0) }
+    var showAddKey by remember { mutableStateOf(false) }
+    val rowIdx = selRow.coerceIn(0, (layout.rows.size - 1).coerceAtLeast(0))
+    val row = layout.rows.getOrNull(rowIdx).orEmpty()
+
+    fun update(rows: List<List<String>> = layout.rows, spacing: Int = layout.spacingDp) {
+        tabsVm.setUiKeyLayout(KeyLayout(rows, spacing))
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(horizontal = 12.dp, vertical = 6.dp).animateContentSize(),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text("Key layout", style = MaterialTheme.typography.bodyMedium)
+            // ---- live preview: the real renderer, inert ----
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(vertical = 4.dp)) {
+                    layout.rows.take(prefs.keyRows.coerceIn(0, 4)).forEach { ids ->
+                        TerminalKeyRow(
+                            ids = ids,
+                            spacingDp = layout.spacingDp,
+                            ctrlMode = ModMode.OFF,
+                            altMode = ModMode.OFF,
+                            altGrMode = ModMode.OFF,
+                            onModifier = {},
+                            onSend = {},
+                            onSubmitReturn = {},
+                        )
+                    }
+                }
+            }
+            // ---- row tabs ----
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                layout.rows.forEachIndexed { i, _ ->
+                    FilterChip(
+                        selected = i == rowIdx,
+                        onClick = { selRow = i },
+                        label = { Text("Row ${i + 1}") },
+                    )
+                }
+            }
+            // ---- keys of the selected row: move ‹ ›, remove × ----
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                row.forEachIndexed { j, id ->
+                    val canRemove = layout.rows.size > 1 || row.size > 1
+                    IconButton(
+                        onClick = {
+                            val mut = row.toMutableList()
+                            val item = mut.removeAt(j)
+                            mut.add((j - 1).coerceAtLeast(0), item)
+                            update(rows = layout.rows.toMutableList().also { it[rowIdx] = mut })
+                        },
+                        enabled = j > 0,
+                        modifier = Modifier.size(28.dp),
+                    ) { Icon(Icons.Filled.ChevronLeft, "Move left") }
+                    AssistChip(
+                        onClick = {},
+                        label = { Text(keyLabelFor(id)) },
+                        trailingIcon = {
+                            IconButton(
+                                onClick = {
+                                    update(rows = layout.rows.toMutableList().also {
+                                        it[rowIdx] = row.filterIndexed { k, _ -> k != j }
+                                    })
+                                },
+                                enabled = canRemove,
+                                modifier = Modifier.size(24.dp),
+                            ) { Icon(Icons.Filled.Close, "Remove", modifier = Modifier.size(14.dp)) }
+                        },
+                    )
+                    IconButton(
+                        onClick = {
+                            val mut = row.toMutableList()
+                            val item = mut.removeAt(j)
+                            mut.add((j + 1).coerceAtMost(mut.size), item)
+                            update(rows = layout.rows.toMutableList().also { it[rowIdx] = mut })
+                        },
+                        enabled = j < row.size - 1,
+                        modifier = Modifier.size(28.dp),
+                    ) { Icon(Icons.Filled.ChevronRight, "Move right") }
+                }
+            }
+            // ---- add key (only unused ids are offered — no duplicates) ----
+            val used = layout.rows.flatten().toSet()
+            val avail = allKeyIds().filterNot { it in used }
+            ExposedDropdownMenuBox(expanded = showAddKey, onExpandedChange = { showAddKey = it }) {
+                OutlinedButton(
+                    onClick = {},
+                    enabled = avail.isNotEmpty(),
+                    modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true),
+                ) {
+                    Icon(Icons.Filled.Add, null)
+                    Text(if (avail.isEmpty()) "All keys placed" else "Add key")
+                }
+                ExposedDropdownMenu(expanded = showAddKey, onDismissRequest = { showAddKey = false }) {
+                    avail.forEach { id ->
+                        DropdownMenuItem(
+                            text = { Text(keyLabelFor(id)) },
+                            onClick = {
+                                update(rows = layout.rows.toMutableList().also {
+                                    it[rowIdx] = row + id
+                                })
+                                showAddKey = false
+                            },
+                        )
+                    }
+                }
+            }
+            // ---- rows, spacing, reset ----
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(
+                    onClick = { update(rows = layout.rows + listOf(listOf("enter"))) },
+                    enabled = layout.rows.size < 4,
+                ) { Text("Add row") }
+                OutlinedButton(
+                    onClick = {
+                        update(rows = layout.rows.filterIndexed { i, _ -> i != rowIdx })
+                        selRow = (rowIdx - 1).coerceAtLeast(0)
+                    },
+                    enabled = layout.rows.size > 1,
+                ) { Text("Remove row") }
+                TextButton(onClick = { update(rows = defaultKeyRows(), spacing = 4) }) {
+                    Text("Reset")
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Key spacing", style = MaterialTheme.typography.bodyMedium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Slider(
+                        value = layout.spacingDp.toFloat(),
+                        onValueChange = { update(spacing = it.toInt()) },
+                        valueRange = 0f..16f,
+                        steps = 15,
+                        modifier = Modifier.weight(1f, fill = false).padding(horizontal = 8.dp),
+                    )
+                    Text(
+                        "${layout.spacingDp}dp",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(end = 4.dp),
+                    )
+                }
             }
         }
     }

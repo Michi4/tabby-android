@@ -37,7 +37,7 @@ private val WIDE: BooleanArray by lazy {
  * OSC/DCS swallowing, charset/mode swallowing, DSR responses (queued for the
  * connection to write back). Unknown sequences degrade, never crash.
  */
-class TerminalBuffer(val cols: Int = 80, val rows: Int = 24, val maxScrollback: Int = 2000) {
+class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, val maxScrollback: Int = 2000) {
 
     data class Cell(
         val ch: Char = ' ',
@@ -391,6 +391,46 @@ class TerminalBuffer(val cols: Int = 80, val rows: Int = 24, val maxScrollback: 
             active().addFirst(blankLine())
             if (active().size > rows + maxScrollback) active().removeLast()
         } else if (cursorRow > 0) cursorRow--
+    }
+
+    /**
+     * Adapts to a new viewport size (Termius-style SIGWINCH path: the UI calls
+     * this plus `setPtySize` whenever the visible area changes — font size,
+     * key rows, keyboard, fullscreen, rotation). Content is preserved:
+     * overlong lines truncate to the new width (like xterm on shrink),
+     * short lines pad with blanks, scrollback is kept within its bound,
+     * cursor/margins/saved positions clamp. No-op when unchanged.
+     */
+    @Synchronized
+    fun resize(newCols: Int, newRows: Int) {
+        val nc = newCols.coerceIn(20, 300)
+        val nr = newRows.coerceIn(5, 200)
+        if (nc == cols && nr == rows) return
+        for (deque in listOf(main, alt)) {
+            for (idx in deque.indices) {
+                val line = deque[idx]
+                // NOTE: removeAt, never removeLast(): the latter resolves to
+                // Java 21's List.removeLast (absent on Android/JDK17 runtimes)
+                while (line.size > nc) line.removeAt(line.lastIndex)
+                while (line.size < nc) line.add(blankCell())
+            }
+        }
+        cols = nc
+        rows = nr
+        while (main.size < nr) main.addLast(blankLine())
+        while (alt.size < nr) alt.addLast(blankLine())
+        while (alt.size > nr) alt.removeFirst()
+        while (main.size > nr + maxScrollback) main.removeFirst()
+        cursorRow = cursorRow.coerceIn(0, nr - 1)
+        cursorCol = cursorCol.coerceIn(0, nc - 1)
+        scrollTop = 0
+        scrollBottom = nr - 1
+        savedRow = savedRow.coerceIn(0, nr - 1)
+        savedCol = savedCol.coerceIn(0, nc - 1)
+        savedMainRow = savedMainRow.coerceIn(0, nr - 1)
+        savedMainCol = savedMainCol.coerceIn(0, nc - 1)
+        version++
+        _updates.value = version
     }
 
     @Synchronized

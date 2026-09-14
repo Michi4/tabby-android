@@ -249,4 +249,57 @@ class TerminalBufferTest {
         b.feed("─│┌⣀█".toByteArray(Charsets.UTF_8))
         assertEquals(5, b.snapshot().cursorCol)
     }
+
+    @Test fun resizeNoopKeepsVersion() {
+        val b = TerminalBuffer(cols = 20, rows = 5)
+        b.feed("hi".toByteArray())
+        val v = b.snapshot().version
+        b.resize(20, 5)
+        assertEquals(v, b.snapshot().version)
+    }
+
+    @Test fun resizeGrowKeepsContentAndCursor() {
+        val b = TerminalBuffer(cols = 20, rows = 5)
+        b.feed("hi".toByteArray())
+        b.resize(100, 30)
+        assertTrue(b.visibleText().contains("hi"))
+        assertEquals(2, b.snapshot().cursorCol)
+        assertEquals(100, b.snapshot().lines[0].size)
+    }
+
+    @Test fun resizeShrinkTruncatesAndClamps() {
+        // note: resize clamps to 20..300 x 5..200, so shrink within bounds
+        val b = TerminalBuffer(cols = 40, rows = 8)
+        repeat(7) { b.feed("\r\n".toByteArray()) } // content lands on the last row
+        b.feed("0123456789ABCDEFGHIJKLMNOPQRSTUV".toByteArray())
+        b.resize(24, 5)
+        val snap = b.snapshot()
+        assertTrue(snap.lines.all { it.size == 24 })
+        assertTrue(snap.cursorCol <= 23)
+        assertTrue(snap.cursorRow <= 4)
+        assertTrue(b.visibleText().contains("0123456789ABCDEFGHIJKLMN"))
+    }
+
+    @Test fun resizeClampsToSaneBounds() {
+        val b = TerminalBuffer(cols = 20, rows = 8)
+        b.resize(1, 1) // clamped to minimums, never zero/negative
+        assertEquals(20, b.cols)
+        assertEquals(5, b.rows)
+    }
+
+    @Test fun resizeResetsMargins() {
+        val b = TerminalBuffer(cols = 20, rows = 5)
+        b.feed("$ESC[2;4r".toByteArray())
+        b.resize(40, 10)
+        // margins reset: full-screen scroll works again
+        b.feed("x".toByteArray())
+        assertTrue(b.visibleText().contains("x"))
+    }
+
+    @Test fun resizeBoundsScrollback() {
+        val b = TerminalBuffer(cols = 20, rows = 5, maxScrollback = 2)
+        repeat(10) { b.feed("l$it\r\n".toByteArray()) }
+        b.resize(20, 4)
+        assertTrue(b.snapshot().lines.size <= 4 + 2)
+    }
 }
