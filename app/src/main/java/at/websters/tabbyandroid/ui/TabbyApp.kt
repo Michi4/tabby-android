@@ -24,6 +24,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -37,6 +38,7 @@ import at.websters.tabbyandroid.ui.screens.SettingsScreen
 import at.websters.tabbyandroid.ui.screens.TerminalScreen
 import at.websters.tabbyandroid.ui.state.ConnectionsViewModel
 import at.websters.tabbyandroid.ui.state.SshKeysViewModel
+import at.websters.tabbyandroid.ui.state.UpdateViewModel
 import at.websters.tabbyandroid.ui.state.SyncAccountsViewModel
 import at.websters.tabbyandroid.ui.state.TerminalTabsViewModel
 
@@ -53,12 +55,16 @@ fun TabbyApp(
     tabs: TerminalTabsViewModel,
     accounts: SyncAccountsViewModel,
     keys: SshKeysViewModel = viewModel(),
+    update: UpdateViewModel = viewModel(),
 ) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val route = backStack?.destination?.route
     val prefs by tabs.uiPrefs.collectAsState()
     val fullscreenTerminal = prefs.fullscreen && route == Routes.TERMINAL
+
+    // daily update check (silent unless something is new)
+    LaunchedEffect(Unit) { update.check(manual = false) }
 
     // While the keyboard is open the bottom bar would sit behind it as dead
     // space, pushing terminal keys needlessly high — hide it (all routes gain
@@ -159,7 +165,7 @@ fun TabbyApp(
                     val d = if (fwd(initialState.destination.route, targetState.destination.route)) 1 else -1
                     slideOutHorizontally(tween(250)) { -it * d } + fadeOut(tween(250))
                 },
-            ) { SettingsScreen(accounts, connections, tabs) }
+            ) { SettingsScreen(accounts, connections, tabs, update) }
         }
     }
 }

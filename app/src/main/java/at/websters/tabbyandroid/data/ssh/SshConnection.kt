@@ -41,6 +41,10 @@ class SshConnection(
     override val state: StateFlow<SshState> = _state
     private val _status = MutableStateFlow("")
     override val status: StateFlow<String> = _status
+    private val _forwardStatus = MutableStateFlow("")
+    override val forwardStatus: StateFlow<String> = _forwardStatus
+    private val _forwardsOn = MutableStateFlow(true)
+    override val forwardsOn: StateFlow<Boolean> = _forwardsOn
 
     @Volatile override var pendingHostKey: String? = null
         private set
@@ -159,6 +163,7 @@ class SshConnection(
         channel = ch
         _state.value = SshState.CONNECTED
         _status.value = "Connected"
+        startForwards()
         val input = ch.inputStream
         readerJob = CoroutineScope(Dispatchers.IO).launch {
             val buf = ByteArray(8192)
@@ -254,9 +259,77 @@ class SshConnection(
         }
     }
 
+    /**
+     * Starts the profile's enabled port forwards (non-fatal: one bad forward
+     * never kills the session; failures are reported in [forwardStatus]).
+     */
+    private fun startForwards() {
+        val s = session ?: return
+        if (!forwardsOn.value) {
+            _forwardStatus.value = ""
+            return
+        }
+        val enabled = profile.forwards.filter { it.enabled }
+        if (enabled.isEmpty()) {
+            _forwardStatus.value = ""
+            return
+        }
+        var ok = 0
+        val errs = mutableListOf<String>()
+        activeForwards.clear()
+        for (f in enabled) {
+            val sane = at.websters.tabbyandroid.data.model.sanitizeForward(f)
+            try {
+                if (sane.kind == "remote") {
+                    s.setPortForwardingR(sane.remotePort, sane.remoteHost, sane.localPort)
+                } else {
+                    s.setPortForwardingL(sane.localPort, sane.remoteHost, sane.remotePort)
+                }
+                activeForwards.add(sane)
+                ok++
+            } catch (e: Exception) {
+                errs += "${at.websters.tabbyandroid.data.model.describeForward(sane)}: " +
+                    (e.message?.take(120) ?: "failed")
+            }
+        }
+        _forwardStatus.value = when {
+            errs.isEmpty() -> "$ok forward${if (ok == 1) "" else "s"} active"
+            ok == 0 -> "Forward failed: ${errs.first()}"
+            else -> "$ok active, ${errs.size} failed: ${errs.first()}"
+        }
+    }
+
+    private fun stopForwards() {
+        val s = session
+        for (f in activeForwards.toList()) {
+            try {
+                if (s != null) {
+                    if (f.kind == "remote") s.delPortForwardingR(f.remotePort)
+                    else s.delPortForwardingL(f.localPort)
+                }
+            } catch (_: Exception) {
+            }
+        }
+        activeForwards.clear()
+        if (_state.value != SshState.CONNECTED) _forwardStatus.value = ""
+    }
+
+    override fun setForwardsActive(active: Boolean) {
+        _forwardsOn.value = active
+        if (_state.value != SshState.CONNECTED) return
+        if (active) startForwards()
+        else {
+            stopForwards()
+            _forwardStatus.value = "Forwards paused"
+        }
+    }
+
+    private val activeForwards = mutableListOf<at.websters.tabbyandroid.data.model.PortForward>()
+
     override fun close() {
         try { readerJob?.cancel() } catch (_: Exception) {}
         try { shellInput?.close() } catch (_: Exception) {}
+        try { stopForwards() } catch (_: Exception) {}
         try { channel?.disconnect() } catch (_: Exception) {}
         try { session?.disconnect() } catch (_: Exception) {}
         _state.value = SshState.DISCONNECTED

@@ -124,4 +124,22 @@ class TabbyYamlSerializerTest {
         assertEquals("g1", back[0].group)
         assertEquals("Home", back[0].groupName)
     }
+
+    @Test fun deviceOnlyFieldsNeverUploaded() {
+        val p = sample().copy(
+            keyId = "key:1",
+            groupName = "Display Only",
+            forwards = listOf(
+                at.websters.tabbyandroid.data.model.PortForward(
+                    kind = "local", localPort = 8080,
+                    remoteHost = "example.com", remotePort = 80,
+                )
+            ),
+        )
+        val map = TabbyYamlSerializer.profileToMap(p)
+        val dumped = map.toString()
+        assertFalse(dumped.contains("forwards"))
+        assertFalse(dumped.contains("key:1"))
+        assertFalse(dumped.contains("Display Only"))
+    }
 }

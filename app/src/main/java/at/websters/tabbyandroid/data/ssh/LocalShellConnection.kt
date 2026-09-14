@@ -100,6 +100,8 @@ class LocalShellConnection(
 
     override val pendingHostKey: String? = null
     override val pendingHostKeyChanged: Boolean = false
+    override val forwardStatus: StateFlow<String> = MutableStateFlow("")
+    override val forwardsOn: StateFlow<Boolean> = MutableStateFlow(true)
 
     private var proc: Process? = null
     private var stdin: OutputStream? = null
@@ -179,6 +181,8 @@ class LocalShellConnection(
     }
 
     override fun setPtySize(cols: Int, rows: Int) = Unit
+
+    override fun setForwardsActive(active: Boolean) = Unit
 
     override fun close() {
         try { readerJob?.cancel() } catch (_: Exception) {}

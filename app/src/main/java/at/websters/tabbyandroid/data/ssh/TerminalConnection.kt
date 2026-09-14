@@ -20,6 +20,12 @@ interface TerminalConnection : Closeable {
     val pendingHostKey: String?
     val pendingHostKeyChanged: Boolean
 
+    /** Human port-forward summary, "" when none (SSH only). */
+    val forwardStatus: StateFlow<String>
+
+    /** Live-forward master switch (SSH only; per-forward `enabled` applies on start). */
+    val forwardsOn: StateFlow<Boolean>
+
     suspend fun connect(
         password: String,
         privateKeyPem: String? = null,
@@ -33,4 +39,7 @@ interface TerminalConnection : Closeable {
 
     /** Resize the remote pty (best-effort; no-op for the demo shell). */
     fun setPtySize(cols: Int, rows: Int)
+
+    /** Stops (false) or (re)starts (true) the profile's enabled forwards. */
+    fun setForwardsActive(active: Boolean)
 }

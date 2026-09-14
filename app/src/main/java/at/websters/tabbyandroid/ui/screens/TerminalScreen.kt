@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.TextDecrease
 import androidx.compose.material.icons.filled.TextIncrease
 import androidx.compose.material.icons.filled.VerticalAlignBottom
@@ -377,6 +378,8 @@ private fun TerminalTabBody(
     val clipboard = LocalClipboardManager.current
     val state by tab.conn.state.collectAsState()
     val connStatus by tab.conn.status.collectAsState()
+    val fwdStatus by tab.conn.forwardStatus.collectAsState()
+    val fwdOn by tab.conn.forwardsOn.collectAsState()
     val version by tab.conn.buffer.updates.collectAsState()
     val allKeys by keysVm.keys.collectAsState()
     var showHostKey by remember { mutableStateOf<String?>(null) }
@@ -539,6 +542,14 @@ private fun TerminalTabBody(
                 IconButton(onClick = { showMacros = true }) {
                     Icon(Icons.Filled.ElectricBolt, "Macros")
                 }
+                IconButton(onClick = { tab.conn.setForwardsActive(!fwdOn) }) {
+                    Icon(
+                        Icons.Filled.SwapHoriz,
+                        if (fwdOn) "Pause port forwards" else "Resume port forwards",
+                        tint = if (fwdStatus.isNotBlank() && fwdOn) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 IconButton(onClick = {
                     searching = !searching
                     if (!searching) query = ""
@@ -565,6 +576,16 @@ private fun TerminalTabBody(
                     }
                 }
             }
+        }
+
+        if (fwdStatus.isNotBlank()) {
+            Text(
+                fwdStatus,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (fwdStatus.startsWith("Forward failed")) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            )
         }
 
         // ---- find matches (absolute deque indices → visible rows); selection

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Key
@@ -41,6 +43,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,6 +52,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -62,7 +66,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -607,6 +613,11 @@ private fun EditHostDialog(
     var keyId by remember(profile.id) { mutableStateOf(profile.keyId) }
     var keyMenu by remember { mutableStateOf(false) }
     var showKeys by remember { mutableStateOf(false) }
+    var forwards by remember(profile.id) { mutableStateOf(profile.forwards) }
+    var fwKind by remember { mutableStateOf("local") }
+    var fwLocal by remember { mutableStateOf("") }
+    var fwRemoteHost by remember { mutableStateOf("") }
+    var fwRemote by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -643,6 +654,105 @@ private fun EditHostDialog(
                     Icon(Icons.Filled.Key, null)
                     Text("Manage keys")
                 }
+                Text(
+                    "Port forwards (tunnels, device-only)",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                if (forwards.isEmpty()) {
+                    Text(
+                        "None yet — e.g. local :8080 to a server service, " +
+                            "or remote :8080 to a phone service.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                forwards.forEach { f ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                at.websters.tabbyandroid.data.model.describeForward(f),
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                if (f.enabled) "Starts on connect" else "Disabled",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = f.enabled,
+                            onCheckedChange = { on ->
+                                forwards = forwards.map {
+                                    if (it.id == f.id) it.copy(enabled = on) else it
+                                }
+                            },
+                        )
+                        IconButton(onClick = {
+                            forwards = forwards.filterNot { it.id == f.id }
+                        }) { Icon(Icons.Filled.Delete, "Delete forward") }
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FilterChip(
+                        selected = fwKind == "local",
+                        onClick = { fwKind = "local" },
+                        label = { Text("Local") },
+                    )
+                    FilterChip(
+                        selected = fwKind == "remote",
+                        onClick = { fwKind = "remote" },
+                        label = { Text("Remote") },
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedTextField(
+                        value = fwLocal, onValueChange = { fwLocal = it },
+                        label = { Text("Phone port") },
+                        modifier = Modifier.weight(1f), singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                    OutlinedTextField(
+                        value = fwRemoteHost, onValueChange = { fwRemoteHost = it },
+                        label = { Text("Remote host") },
+                        placeholder = { Text("localhost") },
+                        modifier = Modifier.weight(1f), singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = fwRemote, onValueChange = { fwRemote = it },
+                        label = { Text("Server port") },
+                        modifier = Modifier.weight(1f), singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                }
+                TextButton(
+                    onClick = {
+                        val lp = fwLocal.toIntOrNull()
+                        val rp = fwRemote.toIntOrNull()
+                        if (lp == null || rp == null) return@TextButton
+                        forwards = forwards + at.websters.tabbyandroid.data.model.PortForward(
+                            kind = fwKind, localPort = lp,
+                            remoteHost = fwRemoteHost.ifBlank { "localhost" },
+                            remotePort = rp,
+                        )
+                        fwLocal = ""
+                        fwRemoteHost = ""
+                        fwRemote = ""
+                    },
+                    enabled = fwLocal.toIntOrNull() != null && fwRemote.toIntOrNull() != null,
+                ) { Text("Add forward") }
             }
         },
         confirmButton = {
@@ -655,6 +765,7 @@ private fun EditHostDialog(
                         port = port.toIntOrNull()?.coerceIn(1, 65535) ?: 22,
                         username = user.ifBlank { "root" },
                         keyId = keyId,
+                        forwards = forwards,
                     )
                     scope.launch {
                         if (updated.origin == "manual") {

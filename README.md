@@ -60,6 +60,11 @@ the same key. Never commit keystores or passwords (both live outside git).
   history suggestions + macros, find in scrollback (1k–50k lines, survives
   restarts), tappable links, copy line/screen, paste, clear, TOFU host-key
   accept dialog.
+- **Port forwards**: per-host local (`phone :port → server service`) and remote
+  tunnels with per-forward toggles, started on connect, pausable live from the
+  toolbar. Device-only — never uploaded.
+- **In-app updates**: daily GitHub release check with reminder card, one-tap
+  download and system installer handoff — no store needed.
 - **Privacy**: screenshots blocked by default, optional full app lock
   (biometrics/device PIN on every launch), secrets encrypted via Keystore.
 - **Demo shell**: try the terminal with no server — `Terminal → + → Try the demo shell`
@@ -103,7 +108,7 @@ Never commit real tokens. The app never logs tokens/passwords/keys.
 ./gradlew :app:connectedDebugAndroidTest  # needs a phone plugged in
 ```
 
-161 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
+173 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
 folder-tree (nesting, orphans, cycles), terminal buffer (incl. alt-screen,
 margins, erase/insert/delete, DSR, split UTF-8, wide columns) + key bytes + one-shot
 modifier mappings + demo-shell line discipline, vault format errors, known_hosts

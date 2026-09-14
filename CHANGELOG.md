@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.4.4 (versionCode 9)
+
+### Port-forward manager
+- Per-host local (`phone :port → server service`, e.g. dashboards) and
+  remote tunnels with per-forward enable switches, managed in the host editor.
+- Forwards start on connect (failures reported, never fatal), pause/resume
+  live from the toolbar, stop on disconnect. Device-only — never uploaded.
+
+### In-app updates
+- Daily GitHub release check (silent unless something is new) plus manual
+  check in Settings → Updates, with a reminder card, release notes preview,
+  one-tap DownloadManager download and system installer handoff (unknown-sources
+  flow included). Verified against a mocked release API in tests.
+
 ## 1.4.3 (versionCode 8)
 
 ### Gestures

@@ -87,6 +87,7 @@ class ProfileRepository(private val appContext: Context) {
         private val KEY_UI_SUGGEST = booleanPreferencesKey("ui_suggestions")
         private val KEY_UI_SCROLLBACK = intPreferencesKey("ui_scrollback")
         private val KEY_TAB_SCROLLBACK = stringPreferencesKey("open_tabs_scrollback_json")
+        private val KEY_UPDATE_CHECK = stringPreferencesKey("update_check_json")
         private val KEY_VAULT_LOCK = stringPreferencesKey("vault_lock_json")
         private val KEY_VAULT_SEALED = stringPreferencesKey("vault_sealed_json")
         private val KEY_OPEN_TABS = stringPreferencesKey("open_tabs_json")
@@ -617,5 +618,18 @@ class ProfileRepository(private val appContext: Context) {
                 MapSerializer(String.serializer(), ListSerializer(String.serializer())), capped
             )
         }
+    }
+
+    /** Last update check (epoch ms) + newest known release, if any. */
+    val updateCheck: Flow<Pair<Long, at.websters.tabbyandroid.data.update.ReleaseInfo?>> =
+        appContext.tabbyStore.data.map {
+            at.websters.tabbyandroid.data.update.parseUpdateCheck(it[KEY_UPDATE_CHECK])
+        }
+
+    suspend fun saveUpdateCheck(atEpochMs: Long, info: at.websters.tabbyandroid.data.update.ReleaseInfo?) {
+        val js = info?.let {
+            json.encodeToString(at.websters.tabbyandroid.data.update.ReleaseInfo.serializer(), it)
+        }.orEmpty()
+        appContext.tabbyStore.edit { it[KEY_UPDATE_CHECK] = "$atEpochMs|$js" }
     }
 }

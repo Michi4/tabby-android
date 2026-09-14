@@ -1,5 +1,11 @@
 package at.websters.tabbyandroid.ui.screens
 
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.widget.Toast
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -20,8 +26,10 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -38,6 +46,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,10 +54,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import at.websters.tabbyandroid.BuildConfig
 import at.websters.tabbyandroid.data.local.KeyLayout
 import at.websters.tabbyandroid.data.local.UiPrefsDefaults
@@ -58,6 +69,7 @@ import at.websters.tabbyandroid.data.local.keyLabelFor
 import at.websters.tabbyandroid.ui.state.ConnectionsViewModel
 import at.websters.tabbyandroid.ui.state.SyncAccountsViewModel
 import at.websters.tabbyandroid.ui.state.TerminalTabsViewModel
+import at.websters.tabbyandroid.ui.state.UpdateViewModel
 
 /**
  * Settings home: Privacy, Terminal defaults for new tabs, Sync servers,
@@ -68,6 +80,7 @@ fun SettingsScreen(
     accounts: SyncAccountsViewModel,
     connections: ConnectionsViewModel,
     tabs: TerminalTabsViewModel,
+    update: UpdateViewModel = viewModel(),
 ) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
@@ -80,6 +93,8 @@ fun SettingsScreen(
         KeyLayoutCard(tabs)
         SectionHeader("Sync")
         SyncSection(accounts, connections)
+        SectionHeader("Updates")
+        UpdatesCard(update)
         SectionHeader("About")
         AboutCard()
     }
@@ -494,6 +509,110 @@ private fun KeyLayoutCard(tabsVm: TerminalTabsViewModel) {
                         modifier = Modifier.padding(end = 4.dp),
                     )
                 }
+            }
+        }
+    }
+}
+
+/**
+ * In-app updates from GitHub releases: auto-checks daily, manual check on
+ * tap, one-tap download via DownloadManager + system installer prompt.
+ */
+@Composable
+private fun UpdatesCard(vm: UpdateViewModel) {
+    val state by vm.ui.collectAsState()
+    val context = LocalContext.current
+
+    // completion receiver while this screen is composed: finished download
+    // jumps straight to the installer
+    DisposableEffect(state) {
+        val recv = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1) ?: return
+                if (vm.onDownloadComplete(id)) {
+                    Toast.makeText(context, "Update downloaded — opening installer", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+        androidx.core.content.ContextCompat.registerReceiver(
+            context, recv, filter,
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        onDispose { context.unregisterReceiver(recv) }
+    }
+
+    fun onUpdate(info: at.websters.tabbyandroid.data.update.ReleaseInfo) {
+        when (vm.startDownload(info)) {
+            is UpdateViewModel.DownloadStart.AlreadyHave -> {
+                if (!vm.installApk()) {
+                    Toast.makeText(
+                        context,
+                        "Allow installs, then tap Update again",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+            is UpdateViewModel.DownloadStart.Started ->
+                Toast.makeText(context, "Downloading update…", Toast.LENGTH_SHORT).show()
+            is UpdateViewModel.DownloadStart.Unavailable ->
+                Toast.makeText(context, "Couldn't start the download", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(horizontal = 12.dp, vertical = 6.dp).animateContentSize(),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            when (val s = state) {
+                is UpdateViewModel.Ui.Idle ->
+                    Text(
+                        "Version ${BuildConfig.VERSION_NAME} — checking happens automatically, or tap below.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                is UpdateViewModel.Ui.Checking -> Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(modifier = androidx.compose.ui.Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Text("Checking for updates…", style = MaterialTheme.typography.bodyMedium)
+                }
+                is UpdateViewModel.Ui.UpToDate ->
+                    Text(
+                        "Up to date (v${BuildConfig.VERSION_NAME}).",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                is UpdateViewModel.Ui.Available -> {
+                    Text(
+                        "Update available: v${s.info.version}",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (s.info.notes.isNotBlank()) {
+                        Text(
+                            s.info.notes.take(300),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 4,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
+                    Button(onClick = { onUpdate(s.info) }) { Text("Update") }
+                }
+                is UpdateViewModel.Ui.Failed ->
+                    Text(s.message, color = MaterialTheme.colorScheme.error)
+                is UpdateViewModel.Ui.Downloading ->
+                    Text(
+                        "Downloading… progress is in the notification; the installer opens by itself.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = { vm.check(manual = true) }) { Text("Check now") }
             }
         }
     }

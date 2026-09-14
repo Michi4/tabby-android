@@ -45,8 +45,43 @@ data class SshProfile(
     /** Origin: "manual" or "tabby:<accountId>:<configId>" */
     val origin: String = "manual",
     val keepaliveIntervalSec: Int = 5,
+    /** Port forwards (device-only, never uploaded — like [keyId]). */
+    val forwards: List<PortForward> = emptyList(),
 ) {
     fun label(): String = if (username == "root") "$host:$port" else "$username@$host:$port"
+}
+
+/**
+ * One SSH port forward (tunnel) attached to a host.
+ * - `local`: phone `localhost:localPort` → via the server → `remoteHost:remotePort`.
+ *   Use it to reach dashboards/APIs on/through the server from phone apps.
+ * - `remote`: server port `remotePort` → phone `remoteHost:localPort`.
+ *   Use it to expose something running on the phone to the server side.
+ */
+@Serializable
+data class PortForward(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    /** "local" (-L) or "remote" (-R). */
+    val kind: String = "local",
+    val localPort: Int = 8080,
+    val remoteHost: String = "localhost",
+    val remotePort: Int = 80,
+    val enabled: Boolean = true,
+)
+
+/** Storage sanitizer (pure, unit-tested). */
+fun sanitizeForward(f: PortForward): PortForward = f.copy(
+    kind = if (f.kind == "remote") "remote" else "local",
+    localPort = f.localPort.coerceIn(1, 65535),
+    remotePort = f.remotePort.coerceIn(1, 65535),
+    remoteHost = f.remoteHost.trim().ifBlank { "localhost" },
+)
+
+/** One-line summary for lists, e.g. `L :8080 → example.com:80`. */
+fun describeForward(f: PortForward): String {
+    val s = sanitizeForward(f)
+    return if (s.kind == "remote") "R :${s.remotePort} → ${s.remoteHost}:${s.localPort}"
+    else "L :${s.localPort} → ${s.remoteHost}:${s.remotePort}"
 }
 
 /** Metadata for a locally stored SSH private key. Key material itself lives encrypted. */
