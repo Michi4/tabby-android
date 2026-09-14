@@ -1,5 +1,6 @@
 package at.websters.tabbyandroid.data.ssh
 
+import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -161,14 +162,25 @@ class TerminalBuffer(val cols: Int = 80, val rows: Int = 24, val maxScrollback: 
                 b == 0x1B && i + 1 < end && incoming[i + 1] == 'E'.code.toByte() -> {
                     cursorCol = 0; lineFeed(); i += 2
                 }
-                // OSC (window title etc, ends with BEL or ST) and DCS (e.g. tmux passthrough)
+                // OSC (titles, colors, queries), APC (kitty graphics!), SOS, PM
+                // and DCS (e.g. tmux-wrapped passthrough) — all end with BEL or
+                // ST and never produce visible text. APC especially must be
+                // swallowed: its base64 payload would otherwise splatter the
+                // screen. tmux-wrapped DCS (`ESC P tmux; ...`) is unwrapped
+                // (doubled ESCs collapsed) and the inner sequence is parsed.
                 b == 0x1B && i + 1 < end &&
-                    (incoming[i + 1] == ']'.code.toByte() || incoming[i + 1] == 'P'.code.toByte()) -> {
-                    val skip = skipUntilBelOrSt(incoming, i + 2, end)
-                    if (skip >= end && !endsTerminated(incoming, i + 2, end)) {
+                    (incoming[i + 1] == ']'.code.toByte() || incoming[i + 1] == 'P'.code.toByte() ||
+                        incoming[i + 1] == '_'.code.toByte() || incoming[i + 1] == '^'.code.toByte() ||
+                        incoming[i + 1] == 'X'.code.toByte()) -> {
+                    val found = findStringEnd(
+                        incoming, i + 2, end,
+                        tmuxAware = incoming[i + 1] == 'P'.code.toByte(),
+                    )
+                    if (found == null) {
                         carry = incoming.copyOfRange(i, end); break
                     }
-                    i = skip
+                    found.second?.let { feed(it) }
+                    i = found.first
                 }
                 // charset selection ESC ( B, ESC ) 0, ESC # 8, ... — never visible text
                 b == 0x1B && i + 1 < end && incoming[i + 1].toInt().toChar() in "()#%*+" -> {
@@ -397,16 +409,54 @@ class TerminalBuffer(val cols: Int = 80, val rows: Int = 24, val maxScrollback: 
         version++; _updates.value = version
     }
 
-    /** Skips OSC/DCS payload until BEL, ST (ESC + backslash), or end of chunk. */
-    private fun skipUntilBelOrSt(data: ByteArray, from: Int, end: Int): Int {
-        var j = from
+    /**
+     * Finds the end of an OSC/APC/SOS/PM/DCS string starting at [from].
+     * Returns (index after terminator, tmux-unwrapped inner bytes or null),
+     * or null when the chunk ends mid-string (caller carries the tail).
+     * With [tmuxAware] (DCS only), a `tmux;` prefix switches to tmux rules:
+     * doubled ESCs collapse to one and the inner sequence is returned for
+     * parsing; the terminator is ST (single ESC + backslash) or BEL.
+     */
+    private fun findStringEnd(
+        data: ByteArray,
+        from: Int,
+        end: Int,
+        tmuxAware: Boolean,
+    ): Pair<Int, ByteArray?>? {
+        var tmux = false
+        if (tmuxAware && end - from >= 5 &&
+            data[from] == 't'.code.toByte() && data[from + 1] == 'm'.code.toByte() &&
+            data[from + 2] == 'u'.code.toByte() && data[from + 3] == 'x'.code.toByte() &&
+            data[from + 4] == ';'.code.toByte()
+        ) {
+            tmux = true
+        }
+        val inner = if (tmux) ByteArrayOutputStream() else null
+        var j = from + if (tmux) 5 else 0
         while (j < end) {
             val c = data[j].toInt() and 0xFF
-            if (c == 0x07) return j + 1
-            if (c == 0x1B && j + 1 < end && data[j + 1] == '\\'.code.toByte()) return j + 2
+            if (c == 0x07) {
+                return (j + 1) to inner?.toByteArray()
+            }
+            if (c == 0x1B) {
+                if (j + 1 >= end) return null // split terminator — wait for more
+                val n = data[j + 1]
+                if (n == '\\'.code.toByte()) {
+                    return (j + 2) to inner?.toByteArray()
+                }
+                if (tmux && n == 0x1B.toByte()) {
+                    inner?.write(0x1B)
+                    j += 2
+                    continue
+                }
+                // unexpected ESC inside a plain string: stop before it so the
+                // outer loop parses it normally (never swallow real escapes)
+                if (!tmux) return j to null
+            }
+            if (tmux) inner?.write(c)
             j++
         }
-        return end
+        return null
     }
 
     /** Approximates 256-color / truecolor down to the 8-color screen model. */

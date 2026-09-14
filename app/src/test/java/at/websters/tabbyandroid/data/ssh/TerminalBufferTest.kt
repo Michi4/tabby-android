@@ -90,6 +90,27 @@ class TerminalBufferTest {
         assertEquals("z", b.visibleText())
     }
 
+    @Test fun apcKittyGraphicsIsSwallowed() {
+        val b = TerminalBuffer(cols = 40, rows = 5)
+        b.feed(("${ESC}_Gi=31337,s=1,v=1,a=q,t=d,f=24;AAAA${ESC}\\" + "z").toByteArray())
+        assertEquals("z", b.visibleText())
+    }
+
+    @Test fun sosAndPmAreSwallowed() {
+        val b = TerminalBuffer(cols = 40, rows = 5)
+        b.feed(("${ESC}Xignored${ESC}\\" + "${ESC}^ignored$BEL" + "y").toByteArray())
+        assertEquals("y", b.visibleText())
+    }
+
+    @Test fun tmuxWrappedDcsIsUnwrapped() {
+        val b = TerminalBuffer(cols = 40, rows = 5)
+        // tmux doubles inner ESCs: ESC P tmux; ESC ESC [1;1H X ESC \
+        b.feed(("${ESC}Ptmux;${ESC}${ESC}[1;1HX${ESC}\\" + "y").toByteArray())
+        val t = b.visibleText()
+        assertTrue(t.startsWith("X"))
+        assertTrue(t.contains("y"))
+    }
+
     @Test fun altScreenEnterExit() {
         val b = TerminalBuffer(cols = 20, rows = 4)
         b.feed("main".toByteArray())

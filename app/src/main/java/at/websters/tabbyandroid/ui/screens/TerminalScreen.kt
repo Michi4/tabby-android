@@ -541,9 +541,15 @@ private fun TerminalTabBody(
                     ),
             ) {
                 SelectionContainer {
+                    // NEVER soft-wrap: buffer lines are exactly cols wide and
+                    // must map 1:1 to visual rows (a wrapped logo/table looks
+                    // "cut off", like Termius never does). Overflow scrolls
+                    // horizontally instead.
                     Text(
                         text = rendered,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        softWrap = false,
                         style = TextStyle(
                             color = Color.White,
                             fontFamily = FontFamily.Monospace,

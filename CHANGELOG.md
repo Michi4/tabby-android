@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.1 (versionCode 6)
+
+### Terminal rendering (the opencode/btop wrapping bug)
+- Root cause of cut-off logos and wrapped lines: Compose `Text` soft-wrapped
+  the 80-cell buffer lines at the view width (worse at large font sizes), so
+  every long line looked sliced — Termius never wraps. The terminal screen now
+  uses `softWrap = false` with horizontal scroll: buffer lines map 1:1 to
+  visual rows at any font size.
+- Proof: a real captured opencode frame replayed through the buffer renders
+  byte-perfect (new `OpencodeFrameTest` regression test ships the captured
+  stream); the corruption lived purely in the Compose layer.
+- Robustness alongside: APC/SOS/PM strings (kitty graphics etc.) are swallowed
+  instead of leaking payload text on screen; tmux-wrapped DCS is unwrapped
+  and parsed instead of skipped.
+
 ## 1.4.0 (versionCode 5)
 
 ### Keyboard & function keys
