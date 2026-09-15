@@ -15,8 +15,8 @@ android {
         applicationId = "at.websters.tabbyandroid"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.4.4"
+        versionCode = 10
+        versionName = "1.4.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

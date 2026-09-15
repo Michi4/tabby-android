@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.4.5 (versionCode 10)
+
+### TUI rendering perfection + data races (the since-1.3.0 TUI bug, finally pinned)
+- **Cut-off logos, wrapped tables**: Compose `Text` was soft-wrapping the
+  80-cell buffer lines at its own width (worse at large fonts). Fixed with
+  `softWrap = false` + horizontal scroll — buffer lines map 1:1 to visual
+  rows (Termius never wraps). Proven with a replayed captured opencode frame.
+- **Robustness**: APC/SOS/PM strings (kitty graphics) swallowed; tmux-wrapped
+  DCS unwrapped; `List.removeLast()` crash on real phones fixed.
+- **CJK/emoji 2-column**: wide glyphs advance 2 cells, filler skipped, wraps
+  whole (like xterm) — no more misaligned btop bars.
+
+### Adaptive viewport
+- Real character cells are measured; buffer + remote pty resize together
+  (SIGWINCH) on font, key-row, keyboard, fullscreen and rotation changes.
+
+### Macros, history & suggestions (the big UX win)
+- Fish-style suggestion chips learned from commands you ran (secret-looking
+  lines never recorded), frequency-ranked, toggleable in Settings, filled
+  for review then submitted normally.
+- Macros: name + command (both encrypted), tap the row to fill, ▶ to run;
+  fast-typing now dispatches newline per character — deleting on an empty
+  line sends DEL correctly on every keyboard.
+- Fixes: suggestions now not suppressed for short prefixes like \`l\` (fixed
+  to 2), demo-shell send race fixed (serializes disciplined sends; lost
+  markers repro → hammering test), and fill now transmits (nothing vanishes
+  on submit).
+
 ## 1.4.4 (versionCode 9)
 
 ### Port-forward manager

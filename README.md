@@ -108,7 +108,7 @@ Never commit real tokens. The app never logs tokens/passwords/keys.
 ./gradlew :app:connectedDebugAndroidTest  # needs a phone plugged in
 ```
 
-173 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
+175 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
 folder-tree (nesting, orphans, cycles), terminal buffer (incl. alt-screen,
 margins, erase/insert/delete, DSR, split UTF-8, wide columns) + key bytes + one-shot
 modifier mappings + demo-shell line discipline, vault format errors, known_hosts
