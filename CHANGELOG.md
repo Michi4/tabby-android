@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.6 (versionCode 11)
+
+### Audit hardening (from 1.4.5 review)
+- Settings key-layout editor: "Add key" now opens the picker (was inert).
+- Updater: allowlist for APK host + https + tag sanitized for filename; evil asset URL → `Failed("bad asset URL")` (new test).
+- Scrollback: `open_tabs_scrollback_json` now drops secret-bearing lines at write (`isSensitiveCommand` filter) and purges orphans on profile delete; cap stays 10×200.
+- Data: `clearVaultLockMode`/`clearRemoteHash`/`saveUpdateCheck` + ESP history/macros now quarantine `.corrupt-bak` before overwrite.
+- Infra: `data_extraction_rules.xml` + `android:dataExtractionRules` for the `allowBackup` deprecation on API 31+.
+
 ## 1.4.5 (versionCode 10)
 
 ### TUI rendering perfection + data races (the since-1.3.0 TUI bug, finally pinned)
