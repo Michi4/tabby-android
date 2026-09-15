@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.4.8 (versionCode 13)
+
+### Updater stops interrupting you
+- **The installer never opens on its own anymore.** 1.4.7 auto-launched the
+  system installer the moment a download finished — a fullscreen popup over
+  whatever you were doing (including a live terminal), possibly repeatedly.
+  Now a finished download waits as `Ready to install` with a big Install
+  button; the installer opens only from your explicit tap. Auto-download
+  stays (toggleable), auto-install is gone.
+- **Single daily check**: the launch check lived in two places (app + view
+  model) and could double-fire; now only the app triggers it. Downloads also
+  refuse to stack/restart while one is active.
+
+### Toggles stop "bugging away"
+- **Switches flip instantly** (optimistic UI): every Settings switch now
+  shows your tap immediately and reconciles when storage lands, instead of
+  waiting on the persistence round-trip that made taps look ignored.
+- **Per-tab Follow + font size survive rotation**: they were plain `remember`
+  state, so rotating (or backgrounding) silently reset them to defaults —
+  the toggle looked like it "bugged away". Now `rememberSaveable` per tab.
+- **Key-row toggle matches your layout**: it cycled a hardcoded 4→3→2→1
+  that didn't match custom layouts; now it cycles your layout's own row
+  count down to hidden and back (new `nextKeyRows`, unit-tested).
+
+### Settings can never crash the app
+- **Self-healing preferences**: DataStore now has a corruption handler —
+  a corrupt prefs file falls back to defaults instead of crashing every
+  settings collector.
+- **Guarded writes**: all settings writes are `runCatching` fire-and-forget,
+  so a toggle can never take the process down even on disk I/O failure.
+
 ## 1.4.7 (versionCode 12)
 
 ### In-app updater perfected

@@ -79,6 +79,16 @@ fun defaultKeyRows(): List<List<String>> = listOf(
     listOf("f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12"),
 )
 
+/**
+ * Visible-row cycler for the per-tab key-row toggle: N → … → 1 → hidden(0) → N,
+ * where N is the layout's own row count (clamped 1–4), so the toggle always
+ * matches your custom layout instead of a hardcoded 4. Pure, unit-tested.
+ */
+fun nextKeyRows(current: Int, layoutRows: Int): Int {
+    val max = layoutRows.coerceIn(1, 4)
+    return if (current <= 0) max else current - 1
+}
+
 /** Storage sanitizer (pure, unit-tested): unknown ids dropped, bounds clamped. */
 fun sanitizeKeyLayout(layout: KeyLayout): KeyLayout {
     val known = allKeyIds().toSet()

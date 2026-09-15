@@ -275,6 +275,14 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = ProfileRepository(app)
     private val secrets = at.websters.tabbyandroid.data.local.SecureTokenStorage(app)
 
+    /**
+     * Fire-and-forget pref write that can never crash the app: a settings
+     * toggle must never take the process down, even on disk I/O failure.
+     */
+    private fun persist(block: suspend () -> Unit) {
+        viewModelScope.launch { runCatching { block() } }
+    }
+
     private val _tabs = MutableStateFlow<List<Tab>>(emptyList())
     val tabs: StateFlow<List<Tab>> = _tabs
     private val _active = MutableStateFlow<String?>(null)
@@ -307,31 +315,31 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     fun setUiFontSize(sizeSp: Int) {
-        viewModelScope.launch { repo.setUiFontSize(sizeSp) }
+        persist { repo.setUiFontSize(sizeSp) }
     }
 
     fun setUiFollow(follow: Boolean) {
-        viewModelScope.launch { repo.setUiFollow(follow) }
+        persist { repo.setUiFollow(follow) }
     }
 
     fun setUiKeyRows(rows: Int) {
-        viewModelScope.launch { repo.setUiKeyRows(rows) }
+        persist { repo.setUiKeyRows(rows) }
     }
 
     fun setUiFullscreen(fullscreen: Boolean) {
-        viewModelScope.launch { repo.setUiFullscreen(fullscreen) }
+        persist { repo.setUiFullscreen(fullscreen) }
     }
 
     fun setUiPinchZoom(enabled: Boolean) {
-        viewModelScope.launch { repo.setUiPinchZoom(enabled) }
+        persist { repo.setUiPinchZoom(enabled) }
     }
 
     fun setUiSuggestions(enabled: Boolean) {
-        viewModelScope.launch { repo.setUiSuggestions(enabled) }
+        persist { repo.setUiSuggestions(enabled) }
     }
 
     fun setUiScrollback(n: Int) {
-        viewModelScope.launch { repo.setUiScrollback(n) }
+        persist { repo.setUiScrollback(n) }
     }
 
     // ---- command history (frequency-ranked suggestions) + macros ----
@@ -372,7 +380,7 @@ class TerminalTabsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setUiKeyLayout(layout: at.websters.tabbyandroid.data.local.KeyLayout) {
-        viewModelScope.launch { repo.setUiKeyLayout(layout) }
+        persist { repo.setUiKeyLayout(layout) }
     }
 
     init {
@@ -470,6 +478,11 @@ class SyncAccountsViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = ProfileRepository(app)
     private val secrets = SecureTokenStorage(app)
     private val sync = SyncRepository(repo, secrets)
+
+    /** Fire-and-forget pref write that can never crash the app (see tabs VM). */
+    private fun persist(block: suspend () -> Unit) {
+        viewModelScope.launch { runCatching { block() } }
+    }
 
     val accounts: StateFlow<List<SyncAccount>> = repo.accounts
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -600,14 +613,14 @@ class SyncAccountsViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     fun setAllowScreen(allow: Boolean) {
-        viewModelScope.launch { repo.setAllowScreenCapture(allow) }
+        persist { repo.setAllowScreenCapture(allow) }
     }
 
     val appLock: StateFlow<Boolean> = repo.appLock
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     fun setAppLock(locked: Boolean) {
-        viewModelScope.launch { repo.setAppLock(locked) }
+        persist { repo.setAppLock(locked) }
     }
 
     fun forgetHostKeys() {

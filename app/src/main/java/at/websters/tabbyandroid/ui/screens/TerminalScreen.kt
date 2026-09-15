@@ -128,6 +128,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import at.websters.tabbyandroid.data.local.UiPrefs
 import at.websters.tabbyandroid.data.local.UiPrefsDefaults
+import at.websters.tabbyandroid.data.local.nextKeyRows
 import at.websters.tabbyandroid.data.ssh.CtrlKeys
 import at.websters.tabbyandroid.data.ssh.DEMO_SHELL_PREFIX
 import at.websters.tabbyandroid.data.ssh.SENDER_SENTINEL
@@ -383,16 +384,18 @@ private fun TerminalTabBody(
     val version by tab.conn.buffer.updates.collectAsState()
     val allKeys by keysVm.keys.collectAsState()
     var showHostKey by remember { mutableStateOf<String?>(null) }
-    // runtime toggles, seeded from Settings → Terminal (new tabs only)
-    var follow by remember(tab.id) { mutableStateOf(prefs.follow) }
-    var fontSize by remember(tab.id) { mutableIntStateOf(prefs.fontSize) }
+    // runtime toggles, seeded from Settings → Terminal (new tabs only);
+    // saveable so rotation/backgrounding can never silently reset them
+    // (the classic "toggle bugs away" snap-back)
+    var follow by rememberSaveable(tab.id) { mutableStateOf(prefs.follow) }
+    var fontSize by rememberSaveable(tab.id) { mutableIntStateOf(prefs.fontSize) }
     var pwVisible by remember { mutableStateOf(false) }
     // one-shot modifiers live in the top key row (tap = next key, 2×tap = lock)
     var ctrlMode by remember(tab.id) { mutableStateOf(ModMode.OFF) }
     var altMode by remember(tab.id) { mutableStateOf(ModMode.OFF) }
     var altGrMode by remember(tab.id) { mutableStateOf(ModMode.OFF) }
-    // extended-key rows on screen: 3 -> 2 -> 1 -> hidden, cycles on toggle
-    // (saveable: survives rotation per tab)
+    // extended-key rows on screen, cycles on toggle through the layout's
+    // own row count (N -> … -> 1 -> hidden -> N; saveable per tab)
     var keyRows by rememberSaveable(tab.id) { mutableIntStateOf(prefs.keyRows) }
     // ephemeral creds (just-entered) win; stored creds (encrypted) are the fallback
     // so reconnect works after backgrounding / process death without re-typing
@@ -523,7 +526,7 @@ private fun TerminalTabBody(
                     .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = { keyRows = if (keyRows <= 0) 4 else keyRows - 1 }) {
+            IconButton(onClick = { keyRows = nextKeyRows(keyRows, prefs.keyLayout.rows.size) }) {
                     Icon(
                         if (keyRows == 0) Icons.Filled.Keyboard else Icons.Filled.KeyboardHide,
                         "Key rows: $keyRows (tap to cycle)",

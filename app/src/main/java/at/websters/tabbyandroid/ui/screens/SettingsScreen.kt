@@ -1,10 +1,5 @@
 package at.websters.tabbyandroid.ui.screens
 
-import android.app.DownloadManager
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.widget.Toast
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.horizontalScroll
@@ -46,7 +41,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -110,7 +105,13 @@ private fun SectionHeader(text: String) {
     )
 }
 
-/** A full-width row whose switch toggles when tapping anywhere on the row. */
+/**
+ * A full-width row whose switch toggles when tapping anywhere on the row.
+ * Optimistic: flips instantly on tap and reconciles when the stored value
+ * lands, so a slow persistence emission can never make a tap look ignored
+ * (the classic "toggle bugs away" snap-back). Diverges for at most ~3s if a
+ * write ever failed, then snaps back to the stored truth.
+ */
 @Composable
 private fun SwitchRow(
     title: String,
@@ -118,9 +119,20 @@ private fun SwitchRow(
     checked: Boolean,
     onChange: (Boolean) -> Unit,
 ) {
+    var pending by remember { mutableStateOf<Boolean?>(null) }
+    val shown = pending ?: checked
+    LaunchedEffect(checked) {
+        if (pending != null && pending == checked) pending = null
+    }
+    LaunchedEffect(pending) {
+        if (pending != null) {
+            kotlinx.coroutines.delay(3000)
+            pending = null
+        }
+    }
     Row(
         Modifier.fillMaxWidth()
-            .toggleable(checked, onValueChange = onChange, role = Role.Switch)
+            .toggleable(shown, onValueChange = { v -> pending = v; onChange(v) }, role = Role.Switch)
             .padding(vertical = 6.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
@@ -135,7 +147,7 @@ private fun SwitchRow(
                 )
             }
         }
-        Switch(checked = checked, onCheckedChange = null)
+        Switch(checked = shown, onCheckedChange = null)
     }
 }
 
@@ -567,7 +579,7 @@ private fun UpdatesCard(vm: UpdateViewModel) {
                         Toast.makeText(context, "Downloading update…", Toast.LENGTH_SHORT).show()
                     }) { Text("Update now") }
                     Text(
-                        "Downloads to app storage and opens installer automatically — no file hunting.",
+                        "Downloads to app storage — you tap Install when ready. Nothing ever pops up on its own.",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -584,14 +596,14 @@ private fun UpdatesCard(vm: UpdateViewModel) {
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
-                        "Installer will open automatically when done.",
+                        "Stays in the app until done — then tap Install below.",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 is UpdateViewModel.Ui.ReadyToInstall -> {
                     Text(
-                        "Downloaded v${s.info.version} — opening installer…",
+                        "Downloaded v${s.info.version} — ready to install.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )

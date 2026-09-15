@@ -58,7 +58,7 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     fun setAutoDownload(enabled: Boolean) {
-        viewModelScope.launch { repo.setUpdateAutoDownload(enabled) }
+        viewModelScope.launch { runCatching { repo.setUpdateAutoDownload(enabled) } }
     }
 
     @Volatile var pendingApk: File? = null
@@ -67,13 +67,21 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
     private var downloadJob: Job? = null
 
     init {
+        // Surface a cached newer release; the daily check is owned by TabbyApp
+        // (single trigger — no double check at launch). Downloads only start
+        // from check()/explicit tap, and the installer ONLY ever opens from an
+        // explicit user tap (never automatically — no popups over your work).
         viewModelScope.launch {
             val (_, cached) = repo.updateCheck.first()
             if (cached != null && isNewerThan(cached.tag, BuildConfig.VERSION_NAME)) {
-                _ui.value = Ui.Available(cached)
-                if (repo.updateAutoDownload.first()) startDownload(cached)
+                if (isApkCached(cached)) {
+                    pendingApk = cachedApkFile(cached)
+                    _ui.value = Ui.ReadyToInstall(cached, pendingApk!!)
+                } else {
+                    _ui.value = Ui.Available(cached)
+                    if (repo.updateAutoDownload.first()) startDownload(cached)
+                }
             }
-            check(manual = false)
         }
     }
 
@@ -109,20 +117,37 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
         if (_ui.value is Ui.Failed || _ui.value is Ui.DownloadFailed) _ui.value = Ui.Idle
     }
 
-    fun startDownload(info: ReleaseInfo) {
-        downloadJob?.cancel()
+    private fun apkDir(): File {
         val ctx = getApplication<Application>()
-        val safeTag = info.tag.replace(Regex("[^A-Za-z0-9._-]"), "_")
         val dir = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: ctx.filesDir
         dir.mkdirs()
+        return dir
+    }
+
+    private fun cachedApkFile(info: ReleaseInfo): File {
+        val safeTag = info.tag.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        return File(apkDir(), "tabby-android-${safeTag}.apk")
+    }
+
+    private fun isApkCached(info: ReleaseInfo): Boolean {
+        val f = cachedApkFile(info)
+        return f.exists() && f.length() > 1024 * 1024
+    }
+
+    fun startDownload(info: ReleaseInfo) {
+        // Re-entry guard: never stack/cancel-restart an active download.
+        if (_ui.value is Ui.Downloading) return
+        downloadJob?.cancel()
+        val safeTag = info.tag.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val dir = apkDir()
         // clean old APKs (keep only this one) to avoid confusion
         dir.listFiles()?.filter { it.name.startsWith("tabby-android-") && it.name != "tabby-android-${safeTag}.apk" }?.forEach { runCatching { it.delete() } }
         val file = File(dir, "tabby-android-${safeTag}.apk")
         pendingApk = file
-        if (file.exists() && file.length() > 1024 * 1024) {
+        if (isApkCached(info)) {
             _ui.value = Ui.ReadyToInstall(info, file)
-            // auto-open installer even for cached file
-            installApk(file)
+            // Deliberately NO auto-install: the system installer only ever
+            // opens from an explicit user tap, never as a surprise popup.
             return
         }
         if (file.exists()) file.delete()
@@ -173,7 +198,7 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 withContext(Dispatchers.Main) {
                     _ui.value = Ui.ReadyToInstall(info, file)
-                    installApk(file)
+                    // No auto-install here either — user taps Install when ready.
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e

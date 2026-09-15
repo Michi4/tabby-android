@@ -3,8 +3,10 @@ package at.websters.tabbyandroid.data.local
 import android.content.Context
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -19,7 +21,12 @@ import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
-private val Context.tabbyStore by preferencesDataStore(name = "tabby_client")
+private val Context.tabbyStore by preferencesDataStore(
+    name = "tabby_client",
+    // Self-healing prefs: a corrupt preferences file falls back to defaults
+    // instead of crashing every collector — settings/toggles can never die.
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+)
 
 /** Defaults for [ProfileRepository] terminal prefs (new tabs pick these up). */
 object UiPrefsDefaults {
