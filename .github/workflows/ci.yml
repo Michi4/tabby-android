@@ -14,7 +14,8 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3.2.3
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --stacktrace
       - name: Lint
