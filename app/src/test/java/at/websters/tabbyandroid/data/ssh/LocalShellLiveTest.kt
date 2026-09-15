@@ -41,6 +41,21 @@ class LocalShellLiveTest {
         }
     }
 
+    @Test fun rapidSequentialSendsStayOrdered() {
+        val c = conn()
+        try {
+            runBlocking { c.connect("") }
+            // The reported "ho elloh" rotation: back-to-back per-char sends
+            // (suggestion fill, fast typing) fanned out onto Dispatchers.IO
+            // and landed out of order. Must read back byte-exact, in order.
+            val word = "abcdefghijklmnopqrstuvwxyz"
+            for (ch in word) c.send(ch.toString())
+            assertTrue("garbled line:\n" + c.buffer.visibleText(), awaitText(c, word))
+        } finally {
+            c.close()
+        }
+    }
+
     @Test fun concurrentSendsDoNotLose() {
         val c = conn()
         try {

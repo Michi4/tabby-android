@@ -40,32 +40,109 @@ class SshConnectionLiveTest {
             knownHosts.writeText("")
             val conn = SshConnection(profile, knownHostsFile = knownHosts)
             try {
-            // rig key is verified out-of-band (matches ssh-keygen -l); accept it
-            val r = conn.connect(cfg["password"]!!, acceptHostKey = true)
-            assertTrue("connect failed: ${r.exceptionOrNull()}", r.isSuccess)
-            assertEquals(SshState.CONNECTED, conn.state.value)
-            conn.send("echo LIVEPROBE987\n")
-            // CR variant: does a lone carriage return execute?
-            conn.send("echo CRPROBE654")
-            conn.send("\r")
-            withTimeout(15_000) {
-                while (!conn.buffer.visibleText().contains("LIVEPROBE987")) {
-                    delay(200)
+                // rig key is verified out-of-band (matches ssh-keygen -l); accept it
+                val r = conn.connect(cfg["password"]!!, acceptHostKey = true)
+                assertTrue("connect failed: ${r.exceptionOrNull()}", r.isSuccess)
+                assertEquals(SshState.CONNECTED, conn.state.value)
+                conn.send("printf 'LIVEPROBE_%s\\n' 987\n")
+                // CR variant: does a lone carriage return execute?
+                conn.send("printf 'CRPROBE_%s\\n' 654")
+                conn.send("\r")
+                withTimeout(15_000) {
+                    while (!conn.buffer.visibleText().contains("LIVEPROBE_987")) {
+                        delay(200)
+                    }
                 }
-            }
-            val text = conn.buffer.visibleText()
-            assertTrue("no echo/output, got:\n$text", text.contains("LIVEPROBE987"))
-            // CR check: typed line echoes once; a second occurrence means it EXECUTED
-            withTimeout(10_000) {
-                while (conn.buffer.visibleText().split("CRPROBE654").size < 3) {
-                    delay(200)
+                val text = conn.buffer.visibleText()
+                assertTrue("no echo/output, got:\n$text", text.contains("LIVEPROBE_987"))
+                // The typed command contains only printf '%s', so the marker appearing
+                // once below the prompt proves that the lone CR executed it.
+                withTimeout(10_000) {
+                    while (!conn.buffer.visibleText().contains("CRPROBE_654")) {
+                        delay(200)
+                    }
                 }
+                println("CR-EXECUTES: lone carriage return runs the command")
+            } finally {
+                conn.close()
             }
-            println("CR-EXECUTES: lone carriage return runs the command")
         } finally {
-            conn.close()
             knownHosts.delete()
         }
+    }
+
+    @Test fun terminalLineEditingResizeAndUtf8(): Unit = runBlocking {
+        val cfg = env()
+        Assume.assumeTrue("no live SSH rig (set TABBY_TEST_SSH_* env)", cfg != null)
+        cfg!!
+        val profile = SshProfile(
+            id = "liveedit", name = "liveedit", host = cfg["host"]!!,
+            port = cfg["port"]!!.toInt(), username = cfg["user"]!!,
+        )
+        val knownHosts = kotlin.io.path.createTempFile("known_hosts").toFile()
+        try {
+            knownHosts.writeText("")
+            val conn = SshConnection(profile, TerminalBuffer(cols = 80, rows = 24), knownHosts)
+            try {
+                val r = conn.connect(cfg["password"]!!, acceptHostKey = true)
+                assertTrue("connect failed: ${r.exceptionOrNull()}", r.isSuccess)
+                assertEquals(SshState.CONNECTED, conn.state.value)
+
+                conn.setPtySize(71, 23)
+                conn.send("stty size\r")
+                withTimeout(15_000) {
+                    while (!conn.buffer.visibleText().contains("23 71")) delay(200)
+                }
+
+                conn.send("printf 'BS_%s\\n' A")
+                conn.send("\u007f")
+                conn.send("B\r")
+                withTimeout(15_000) {
+                    while (!conn.buffer.visibleText().contains("BS_B")) delay(200)
+                }
+
+                conn.send("read -r x; printf 'UTF_%s\\n' \"\$x\"\r")
+                withTimeout(15_000) {
+                    while (!conn.buffer.visibleText().contains("printf")) delay(200)
+                }
+                conn.send("\u00c4\u00d6\u00dc\r")
+                withTimeout(15_000) {
+                    while (!conn.buffer.visibleText().contains("UTF_\u00c4\u00d6\u00dc")) delay(200)
+                }
+            } finally {
+                conn.close()
+            }
+        } finally {
+            knownHosts.delete()
+        }
+    }
+
+    @Test fun ctrlCIsForwardedToServer(): Unit = runBlocking {
+        val cfg = env()
+        Assume.assumeTrue("no live SSH rig (set TABBY_TEST_SSH_* env)", cfg != null)
+        cfg!!
+        val profile = SshProfile(
+            id = "livectrlc", name = "livectrlc", host = cfg["host"]!!,
+            port = cfg["port"]!!.toInt(), username = cfg["user"]!!,
+        )
+        val knownHosts = kotlin.io.path.createTempFile("known_hosts").toFile()
+        try {
+            knownHosts.writeText("")
+            val conn = SshConnection(profile, TerminalBuffer(cols = 80, rows = 24), knownHosts)
+            try {
+                val r = conn.connect(cfg["password"]!!, acceptHostKey = true)
+                assertTrue("connect failed: ${r.exceptionOrNull()}", r.isSuccess)
+                conn.send("sleep 3\r")
+                withTimeout(15_000) {
+                    while (!conn.buffer.visibleText().contains("sleep 3")) delay(200)
+                }
+                conn.send("\u0003")
+                withTimeout(15_000) {
+                    while (!conn.buffer.visibleText().contains("^C")) delay(200)
+                }
+            } finally {
+                conn.close()
+            }
         } finally {
             knownHosts.delete()
         }

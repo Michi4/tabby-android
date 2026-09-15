@@ -16,12 +16,14 @@ object VaultSync {
     }
 
     fun resolvePull(content: String, origin: String, passphrase: String?): PullResolution {
+        if (TabbyYamlParser.isUnreadableConfigContent(content)) {
+            return PullResolution.Failed("Server config is unreadable YAML")
+        }
         val remoteMap = TabbyYamlParser.loadContentMap(content)
-        val parsed = if (remoteMap == null) emptyList()
-        else TabbyYamlParser.parseSshProfilesFromMap(remoteMap, origin)
-        val groups = if (remoteMap == null) emptyList()
-        else TabbyYamlParser.parseGroupsFull(remoteMap)
-        if (parsed.isNotEmpty() || remoteMap == null) {
+        if (remoteMap == null) return PullResolution.Ready(emptyList(), emptyList())
+        val parsed = TabbyYamlParser.parseSshProfilesFromMap(remoteMap, origin)
+        val groups = TabbyYamlParser.parseGroupsFull(remoteMap)
+        if (parsed.isNotEmpty()) {
             return PullResolution.Ready(parsed, groups)
         }
         // no cleartext profiles: maybe a fully-encrypted vault
@@ -56,9 +58,12 @@ object VaultSync {
         tombstoneIds: Set<String>,
         passphrase: String?,
     ): PushResolution {
+        if (TabbyYamlParser.isUnreadableConfigContent(remoteContent)) {
+            return PushResolution.Failed("Server config is unreadable YAML")
+        }
         val remoteMap = TabbyYamlParser.loadContentMap(remoteContent)
         val stored = remoteMap?.let { VaultCrypto.parseStored(it) }
-        if (stored == null || remoteMap == null) {
+        if (stored == null) {
             return PushResolution.Ready(
                 TabbyYamlSerializer.merge(remoteContent, localProfiles, tombstoneIds)
             )

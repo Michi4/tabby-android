@@ -68,6 +68,24 @@ class SshConnection(
     @Volatile private var ptyCols = 80
     @Volatile private var ptyRows = 24
 
+    /**
+     * SSH input is shared by the UI thread (typing, paste, fill, key row)
+     * and by the reader thread (terminal replies to DSR/CPR). Serialize all
+     * pipe writes so a single logical write+flush cannot interleave.
+     */
+    private val ioLock = Any()
+
+    private fun writeStdin(bytes: ByteArray) {
+        val input = shellInput ?: return
+        synchronized(ioLock) {
+            try {
+                input.write(bytes)
+                input.flush()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     override suspend fun connect(
         password: String,
         privateKeyPem: String?,
@@ -176,11 +194,7 @@ class SshConnection(
                         // terminal replies (DSR/CPR) must go back to the server,
                         // otherwise full-screen apps stall waiting for them
                         for (reply in buffer.takePendingOutput()) {
-                            try {
-                                shellInput?.write(reply)
-                                shellInput?.flush()
-                            } catch (_: Exception) {
-                            }
+                            writeStdin(reply)
                         }
                     }
                 }
@@ -237,11 +251,7 @@ class SshConnection(
     }
 
     override fun send(text: String) {
-        try {
-            shellInput?.write(text.toByteArray())
-            shellInput?.flush()
-        } catch (_: Exception) {
-        }
+        writeStdin(text.toByteArray())
     }
 
     override fun sendKey(key: String) = send(key)

@@ -1,6 +1,7 @@
 package at.websters.tabbyandroid.data.ssh
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -53,11 +54,15 @@ class TerminalBufferTest {
         assertTrue(!t.contains("mytitle"))
     }
 
-    @Test fun bracketedPasteToggleIsSwallowed() {
+    @Test fun bracketedPasteToggleIsTracked() {
         val b = TerminalBuffer(cols = 40, rows = 5)
+        assertFalse(b.bracketedPaste)
         b.feed("$ESC[?2004hx".toByteArray())
+        assertTrue(b.bracketedPaste)
         assertTrue(b.visibleText().contains("x"))
         assertTrue(!b.visibleText().contains("?"))
+        b.feed("$ESC[?2004l".toByteArray())
+        assertFalse(b.bracketedPaste)
     }
 
     @Test fun charsetSelectIsSwallowed() {

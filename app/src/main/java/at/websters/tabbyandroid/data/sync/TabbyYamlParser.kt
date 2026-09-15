@@ -67,6 +67,17 @@ object TabbyYamlParser {
             ?.toMutableMap() as? MutableMap<String, Any?>
     }
 
+    /**
+     * True when the server returned content that cannot be parsed as a Tabby
+     * config mapping. Blank/`{}` are valid empty configs and deliberately do
+     * not count as unreadable: treating a corrupt remote file as empty is how
+     * sync/upload can silently erase desktop settings.
+     */
+    fun isUnreadableConfigContent(yamlContent: String): Boolean {
+        if (yamlContent.isBlank() || yamlContent.trim() == "{}") return false
+        return loadContentMap(yamlContent) == null
+    }
+
     /** Resolves the config's `groups: [{id, name}]` (e.g. Termius-imported folders). */
     fun parseGroups(root: Map<*, *>): Map<String, String> =
         parseGroupsFull(root).associate { it.id to it.name }

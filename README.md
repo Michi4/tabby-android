@@ -32,8 +32,12 @@ the same key. Never commit keystores or passwords (both live outside git).
   clobber your desktop config. If the server config changed since your last pull,
   upload stops and asks first ("Pull first" or "Upload anyway"). Merge is
   non-destructive: unmanaged server entries, private-key refs, passwords, scripts
-  and forwards are preserved; deletes propagate via tombstones. Corrupt local
-  data is quarantined (never silently wiped). HTTPS enforced (no cleartext sync).
+  and forwards are preserved; deletes propagate via tombstones. Partial sync
+  failures are per-account: an offline or locked server keeps its cached hosts
+  (including local key/forward assignments) while other servers still update.
+  A corrupt/non-mapping remote YAML fails closed instead of being mistaken for
+  an empty config. Corrupt local data is quarantined (never silently wiped).
+  HTTPS enforced (no cleartext sync).
 - **Vault-encrypted configs**: fully-encrypted Tabby configs decrypt on-device
   (exact desktop algorithm: PBKDF2-SHA512 ×100000 → AES-256-CBC). The vault
   passphrase is asked on-device, never logged, and unlocks per your choice:
@@ -52,9 +56,10 @@ the same key. Never commit keystores or passwords (both live outside git).
   icons, one-shot `Ctrl`/`Alt`/`AltGr` toggles), full xterm emulation
   (alternate screen, scroll margins, insert/delete lines/chars, erase variants,
   cursor save/restore/show-hide, DSR replies, reverse/underline/dim,
-  split-sequence-safe UTF-8, CJK/emoji columns) for `btop`/`tmux`/`vim`/
-  `opencode` and friends, adaptive viewport (buffer + server pty follow font,
-  key rows, keyboard, fullscreen and rotation via SIGWINCH), fullscreen mode
+  split-sequence-safe UTF-8, CJK/emoji columns, bracketed-aware paste) for
+  `btop`/`tmux`/`vim`/`opencode` and friends, adaptive viewport (buffer +
+  server pty follow font, key rows, keyboard, fullscreen and rotation via
+  SIGWINCH), fullscreen mode
   (screen only; keyboard + key rows appear on tap), VT100/ANSI colors, cursor,
   follow-output, font size 1–256sp, pinch-to-zoom, swipe-animated tabs,
   history suggestions + macros, find in scrollback (1k–50k lines, survives
@@ -105,16 +110,19 @@ Never commit real tokens. The app never logs tokens/passwords/keys.
 ./gradlew :app:assembleDebug
 ./gradlew :app:testDebugUnitTest
 ./gradlew :app:lintDebug
-./gradlew :app:connectedDebugAndroidTest  # needs a phone plugged in
+./gradlew :app:connectedDebugAndroidTest  # needs an emulator/device; SSH tests use 10.0.2.2:2222
 ```
 
-175 unit tests, all runnable on JVM, no emulator needed: YAML parse/serialize/merge,
-folder-tree (nesting, orphans, cycles), terminal buffer (incl. alt-screen,
-margins, erase/insert/delete, DSR, split UTF-8, wide columns) + key bytes + one-shot
-modifier mappings + demo-shell line discipline, vault format errors, known_hosts
-replace, secret redaction, content hashing, SSH key generation, sync API
-(auth header, HTTPS rules, error mapping), quick-connect — plus one on-device
-instrumented smoke test (launch → demo shell).
+206 JVM tests (4 skipped unless `TABBY_TEST_SSH_*` live-rig vars are set), all runnable on JVM,
+no emulator needed: YAML parse/serialize/merge,
+folder-tree (nesting, orphans, cycles), sync cache merge (failed/locked accounts,
+device-only key/forward retention), terminal buffer (incl. alt-screen,
+margins, erase/insert/delete, DSR, split UTF-8, wide columns, bracketed paste)
++ key bytes + one-shot modifier mappings + demo-shell line discipline,
+vault format errors, known_hosts replace, secret redaction, content hashing,
+SSH key generation, sync API (auth header, HTTPS rules, error mapping),
+quick-connect — plus 9 on-device instrumented tests (app/demo-shell smoke,
+terminal Unicode input smoke, and live SSH round-trips).
 
 ## Architecture
 

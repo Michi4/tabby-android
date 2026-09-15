@@ -24,6 +24,33 @@
 - Perf-safe: per-frame render stays at screen rows + a cheap plain-text
   history window; the buffer still keeps up to your full scrollback setting.
 
+### Terminal input stays honest (live rig + device tests)
+- **No more "ececho" from suggestions/macros**: tapping a suggestion now edits
+  the current command like a completion, sending only the difference from the
+  typed prefix instead of appending the whole command.
+- **Disconnected tabs refuse input**: typing, Return, fill and macro-run no
+  longer let the local field grow while sends are dropped, preventing phantom
+  history entries and reconnect desync.
+- **Paste uses bracketed paste when available**: DEC private mode 2004 is now
+  tracked, and paste is wrapped in the standard start/end markers when the
+  server accepts it, so multi-line pastes need not execute line-by-line.
+- **Unicode and fast-typing races fixed**: surrogate-pair characters are
+  added/erased as one code point, wide characters erase visually correctly,
+  and demo-shell keystrokes preserve FIFO order even when back-to-back sends
+  fan out across IO workers.
+
+### Sync survives partial failures and corrupt remote configs
+- **One locked/offline server no longer wipes another server's hosts**: `Pull`
+  now updates each account's cached slice independently instead of rebuilding
+  the whole list from successful accounts only.
+- **Device-only assignments survive sync**: local SSH-key assignments and port
+  forwards attached to synced hosts are preserved when the desktop config comes
+  back unchanged (they are never uploaded, but they must not be erased either).
+- **Invalid remote YAML fails closed**: a corrupt/non-mapping server config is
+  now reported as unreadable instead of being mistaken for an empty `{}` config,
+  so Pull cannot drop hosts and Upload cannot overwrite a corrupt remote with a
+  stripped config.
+
 ### Updater stops interrupting you
 - **The installer never opens on its own anymore.** 1.4.7 auto-launched the
   system installer the moment a download finished — a fullscreen popup over

@@ -106,6 +106,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -503,23 +504,32 @@ private fun TerminalTabBody(
         clearOneShots()
     }
 
-    fun sendTermChar(ch: Char) {
-        if (ch == '\n') {
-            sendWithMods("\r")
-            return
-        }
+    fun sendTermText(text: String) {
         val c = ctrlMode != ModMode.OFF
         val a = altMode != ModMode.OFF || altGrMode != ModMode.OFF
-        if (!c && !a) {
-            tab.conn.send(ch.toString())
-        } else {
-            tab.conn.send(CtrlKeys.withModifiers(ch.toString(), c, a))
+        var i = 0
+        while (i < text.length) {
+            val cp = text.codePointAt(i)
+            val s = String(Character.toChars(cp))
+            if (s == "\n") {
+                sendWithMods("\r")
+            } else if (!c && !a) {
+                tab.conn.send(s)
+            } else {
+                tab.conn.send(CtrlKeys.withModifiers(s, c, a))
+            }
+            i += Character.charCount(cp)
         }
         clearOneShots()
     }
 
     // Submit (Return): run the line, then clear the sender for the next one.
+    // Dead tab: refuse (sends would drop while history records = phantom entry).
     fun submitReturn() {
+        if (state != SshState.CONNECTED) {
+            Toast.makeText(context, "Not connected", Toast.LENGTH_SHORT).show()
+            return
+        }
         val cmd = input.text.replace(SENDER_SENTINEL, "")
         suppressReplay = cmd
         if (cmd.isNotBlank()) tabsVm.recordCommand(cmd)
@@ -527,14 +537,23 @@ private fun TerminalTabBody(
         input = TextFieldValue(SENDER_SENTINEL, TextRange(SENDER_SENTINEL.length))
     }
 
-    /** Fills the line (suggestion/macro tap): transmits immediately, exactly
-     * as if typed fast, so sender text and server line can never diverge.
-     * Direct state write (no onValueChange fire); the user reviews, edits,
-     * then submits normally. */
-    fun fillLine(text: String) {
+    /** Fills the line (suggestion/macro tap): REPLACES the current content by
+     * reusing the sender diff, so a typed prefix ("ec") becomes ("echo …")
+     * instead of duplicating ("ececho …") — server line and field stay
+     * byte-identical. Direct state write (no onValueChange fire); the user
+     * reviews, edits, then submits normally. Returns false (and toasts) when
+     * disconnected — filling a dead line could only desync. */
+    fun fillLine(text: String): Boolean {
+        if (state != SshState.CONNECTED) {
+            Toast.makeText(context, "Not connected", Toast.LENGTH_SHORT).show()
+            return false
+        }
         clearOneShots()
-        for (ch in text) sendTermChar(ch)
+        val edit = senderEdit(input.text, SENDER_SENTINEL + text)
+        repeat(edit.deletions) { tab.conn.send(CtrlKeys.byteString(127.toByte())) }
+        sendTermText(edit.sendText)
         input = TextFieldValue(SENDER_SENTINEL + text, TextRange(SENDER_SENTINEL.length + text.length))
+        return true
     }
 
     fun doConnect(pw: String) {
@@ -625,7 +644,7 @@ private fun TerminalTabBody(
                 Toast.makeText(context, "Screen copied", Toast.LENGTH_SHORT).show()
             }) { Icon(Icons.Filled.ContentCopy, "Copy screen") }
                 IconButton(onClick = {
-                    clipboard.getText()?.text?.let { tab.conn.send(it) }
+                    clipboard.getText()?.text?.let { tab.conn.sendPaste(it) }
                 }) { Icon(Icons.Filled.ContentPaste, "Paste") }
                 IconButton(onClick = { tab.conn.buffer.reset() }) {
                     Icon(Icons.Filled.DeleteSweep, "Clear screen")
@@ -834,6 +853,7 @@ private fun TerminalTabBody(
                         Text(
                             text = rendered,
                             modifier = Modifier.fillMaxWidth()
+                                .testTag("terminal_view")
                                 .horizontalScroll(hScroll),
                             softWrap = false,
                             style = termStyle,
@@ -874,6 +894,13 @@ private fun TerminalTabBody(
         BasicTextField(
             value = input,
             onValueChange = { nv ->
+                // Dead tab: swallow keystrokes (sends would drop while the
+                // field grows = guaranteed desync on reconnect). The auth UI
+                // owns input until the session is up.
+                if (state != SshState.CONNECTED) {
+                    input = TextFieldValue(SENDER_SENTINEL, TextRange(SENDER_SENTINEL.length))
+                    return@BasicTextField
+                }
                 val clean = nv.text.replace(SENDER_SENTINEL, "")
                 // swallow the single post-submit replay some IMEs emit after
                 // an app-driven clear (would otherwise resend the line)
@@ -890,7 +917,7 @@ private fun TerminalTabBody(
                     input = nv // cursor/selection move only — preserve it
                 } else {
                     repeat(edit.deletions) { tab.conn.send(CtrlKeys.byteString(127.toByte())) }
-                    for (ch in edit.sendText) sendTermChar(ch)
+                    sendTermText(edit.sendText)
                     input = nv
                 }
             },
@@ -899,6 +926,7 @@ private fun TerminalTabBody(
             modifier = Modifier.fillMaxWidth()
                 .height(1.dp)
                 .alpha(0f)
+                .testTag("terminal_sender")
                 .focusRequester(focusRequester)
                 .onFocusChanged { inputFocused = it.isFocused }
                 .onKeyEvent {
@@ -925,7 +953,7 @@ private fun TerminalTabBody(
             visualTransformation = VisualTransformation.None,
             keyboardOptions = KeyboardOptions(
                 capitalization = KeyboardCapitalization.None,
-                autoCorrect = false,
+                autoCorrectEnabled = false,
                 keyboardType = KeyboardType.Password,
                 imeAction = ImeAction.Done,
             ),
@@ -1114,9 +1142,10 @@ private fun TerminalTabBody(
             tabsVm = tabsVm,
             onFill = { fillLine(it); showMacros = false },
             onRun = { cmd ->
-                tab.conn.send(cmd)
-                if (!cmd.endsWith("\n")) tab.conn.send("\r")
-                tabsVm.recordCommand(cmd.trim())
+                // Single source of truth: replace-then-submit keeps server
+                // line, field and history in sync (never raw-send past a
+                // half-typed prefix — that duplicated text, "ececho"-style).
+                if (fillLine(cmd)) submitReturn()
                 showMacros = false
             },
             onDismiss = { showMacros = false },

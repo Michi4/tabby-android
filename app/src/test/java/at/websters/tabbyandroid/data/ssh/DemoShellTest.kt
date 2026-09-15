@@ -66,6 +66,40 @@ class DemoShellTest {
         assertEquals("ab", d.currentLine)
     }
 
+    @Test fun backspaceErasesWideCjk() {
+        val d = DemoLineDiscipline()
+        val typed = d.input("中")
+        assertEquals("中", echo(typed))
+        val del = d.input(127.toChar().toString())
+        assertEquals("\b\b  \b\b", echo(del))
+        assertEquals("", d.currentLine)
+    }
+
+    @Test fun backspaceErasesWholeSurrogateCodePoint() {
+        val d = DemoLineDiscipline()
+        d.input("\uD83D\uDE00")
+        val del = d.input(127.toChar().toString())
+        assertEquals("\b\b  \b\b", echo(del))
+        assertEquals("", d.currentLine)
+    }
+
+    @Test fun splitSurrogateBuffersUntilComplete() {
+        val d = DemoLineDiscipline()
+        val high = d.input("\uD83D")
+        assertEquals("", echo(high))
+        val low = d.input("\uDE00")
+        assertEquals("\uD83D\uDE00", echo(low))
+        assertEquals("\uD83D\uDE00", d.currentLine)
+    }
+
+    @Test fun backspaceCancelsPendingSurrogate() {
+        val d = DemoLineDiscipline()
+        d.input("\uD83D")
+        val del = d.input(127.toChar().toString())
+        assertEquals("", echo(del))
+        assertEquals("", d.currentLine)
+    }
+
     @Test fun pasteWithNewlineSubmits() {
         val d = DemoLineDiscipline()
         val r = d.input("ls\n")

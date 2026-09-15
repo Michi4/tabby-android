@@ -37,6 +37,16 @@ interface TerminalConnection : Closeable {
 
     fun sendKey(key: String) = send(key)
 
+    /** Paste text, honoring DEC private mode 2004 when the server enabled it. */
+    fun sendPaste(text: String) {
+        if (text.isEmpty()) return
+        if (buffer.bracketedPaste) {
+            send("\u001B[200~$text\u001B[201~")
+        } else {
+            send(text)
+        }
+    }
+
     /** Resize the remote pty (best-effort; no-op for the demo shell). */
     fun setPtySize(cols: Int, rows: Int)
 

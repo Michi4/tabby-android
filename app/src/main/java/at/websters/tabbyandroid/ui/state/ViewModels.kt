@@ -11,6 +11,7 @@ import at.websters.tabbyandroid.data.model.SshProfile
 import at.websters.tabbyandroid.data.model.SyncAccount
 import at.websters.tabbyandroid.data.ssh.SshConnection
 import at.websters.tabbyandroid.data.sync.QuickConnectParser
+import at.websters.tabbyandroid.data.sync.SyncMerge
 import at.websters.tabbyandroid.data.sync.SyncRepository
 import at.websters.tabbyandroid.data.sync.TabbyYamlSerializer
 import at.websters.tabbyandroid.data.sync.VaultLocks
@@ -105,9 +106,10 @@ class ConnectionsViewModel(app: Application) : AndroidViewModel(app) {
                     _msg.value = "Add your Tabby Web instance first (Settings → Sync)"
                     return@launch
                 }
-                val merged = mutableListOf<SshProfile>()
-                val mergedGroups = LinkedHashMap<String, at.websters.tabbyandroid.data.model.TabbyGroup>()
-                // keep manual untouched; rebuild cached from all accounts
+                val existingCached = repo.cachedProfiles.first()
+                val existingGroups = repo.groups.first()
+                val pulls = mutableListOf<SyncMerge.AccountPull>()
+                // keep manual untouched; update only account slices that synced
                 val errors = mutableListOf<String>()
                 val updatedAccounts = accounts.map { acc ->
                     // guarded vaults never auto-read: every unlock goes through biometrics
@@ -121,24 +123,30 @@ class ConnectionsViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     val r = sync.syncAccount(acc, vaultPw)
                     if (r.ok) {
-                        merged += r.profiles
-                        r.groups.forEach { mergedGroups.putIfAbsent(it.id, it) }
+                        pulls += SyncMerge.AccountPull(
+                            accountId = acc.id,
+                            ok = true,
+                            profiles = r.profiles,
+                            groups = r.groups.map { it.copy(ownerAccountId = acc.id) },
+                        )
                         // Drop tombstones the server no longer has (deleted on desktop too).
                         repo.retainTombstones(acc.id, r.profiles.map { it.id }.toSet())
                         VaultLocks.clear(acc.id)
                         acc.copy(lastSyncAtEpochMs = System.currentTimeMillis(), lastError = null)
                     } else {
+                        pulls += SyncMerge.AccountPull(acc.id, ok = false)
                         if (r.vaultLocked) VaultLocks.set(acc.id)
                         errors += "${acc.name}: ${r.error}"
                         acc.copy(lastError = r.error)
                     }
                 }
+                val merged = SyncMerge.merge(existingCached, existingGroups, pulls)
                 repo.saveAccounts(updatedAccounts)
-                repo.saveCached(merged)
-                repo.saveGroups(mergedGroups.values.toList())
+                repo.saveCached(merged.profiles)
+                repo.saveGroups(merged.groups)
                 _msg.value = if (errors.isEmpty()) {
-                    if (merged.isEmpty()) "Synced — remote config is empty ({}). Add SSH profiles on desktop first."
-                    else "Synced ${merged.size} profiles"
+                    if (merged.profiles.isEmpty()) "Synced — remote config is empty ({}). Add SSH profiles on desktop first."
+                    else "Synced ${merged.profiles.size} profiles"
                 } else errors.joinToString("\n")
             } finally {
                 _syncing.value = false

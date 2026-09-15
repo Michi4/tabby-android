@@ -44,39 +44,96 @@ data class DemoInputResult(
  */
 class DemoLineDiscipline {
     private val line = StringBuilder()
+    private var pendingHighSurrogate: Char? = null
 
-    fun reset() = line.clear()
+    fun reset() {
+        line.clear()
+        pendingHighSurrogate = null
+    }
 
-    val currentLine: String get() = line.toString()
+    val currentLine: String get() = line.toString() + (pendingHighSurrogate ?: "")
 
     fun input(text: String): DemoInputResult {
         val proc = ByteArrayOutputStream()
         val echo = ByteArrayOutputStream()
         var eof = false
+
+        fun flushPending() {
+            val high = pendingHighSurrogate ?: return
+            pendingHighSurrogate = null
+            line.append(high)
+            echo.write(high.toString().toByteArray(Charsets.UTF_8))
+        }
+
+        fun appendCodeUnit(ch: Char) {
+            line.append(ch)
+            echo.write(ch.toString().toByteArray(Charsets.UTF_8))
+        }
+
+        fun appendCodePoint(high: Char, low: Char) {
+            val s = String(charArrayOf(high, low))
+            line.append(s)
+            echo.write(s.toByteArray(Charsets.UTF_8))
+        }
+
+        fun eraseLast() {
+            if (line.isEmpty()) return
+            val last = line.last()
+            val removeUnits = if (last.isLowSurrogate() && line.length >= 2 && line[line.length - 2].isHighSurrogate()) 2 else 1
+            val cp = Character.codePointBefore(line, line.length)
+            val width = terminalCodePointWidth(cp).coerceAtLeast(1)
+            line.delete(line.length - removeUnits, line.length)
+            val erase = buildString {
+                repeat(width) { append('\b') }
+                repeat(width) { append(' ') }
+                repeat(width) { append('\b') }
+            }
+            echo.write(erase.toByteArray(Charsets.UTF_8))
+        }
+
         for (ch in text) {
             when {
                 ch == '\r' || ch == '\n' -> {
+                    flushPending()
                     proc.write((line.toString() + "\n").toByteArray(Charsets.UTF_8))
                     echo.write("\r\n$ ".toByteArray(Charsets.UTF_8))
                     line.clear()
                 }
                 ch.code == 0x7F || ch.code == 0x08 -> {
-                    if (line.isNotEmpty()) {
-                        line.deleteCharAt(line.length - 1)
-                        echo.write("\b \b".toByteArray(Charsets.UTF_8))
+                    if (pendingHighSurrogate != null) {
+                        pendingHighSurrogate = null
+                    } else {
+                        eraseLast()
                     }
                 }
                 ch.code == 0x03 -> {
+                    pendingHighSurrogate = null
                     line.clear()
                     echo.write("^C\r\n$ ".toByteArray(Charsets.UTF_8))
                 }
                 ch.code == 0x04 -> {
-                    if (line.isEmpty()) eof = true
+                    if (pendingHighSurrogate == null && line.isEmpty()) eof = true
                 }
-                ch.code < 0x20 -> Unit // swallow other C0 controls
+                ch.code < 0x20 -> {
+                    flushPending()
+                }
+                ch.isHighSurrogate() -> {
+                    flushPending()
+                    pendingHighSurrogate = ch
+                }
+                ch.isLowSurrogate() -> {
+                    val high = pendingHighSurrogate
+                    if (high != null && high.isHighSurrogate()) {
+                        appendCodePoint(high, ch)
+                        pendingHighSurrogate = null
+                    } else {
+                        flushPending()
+                        appendCodeUnit(ch)
+                    }
+                }
                 else -> {
-                    line.append(ch)
-                    echo.write(ch.toString().toByteArray(Charsets.UTF_8))
+                    flushPending()
+                    appendCodeUnit(ch)
                 }
             }
         }
@@ -113,13 +170,16 @@ class LocalShellConnection(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     /**
-     * Serializes every send (line assembly + echo + pipe write). Without it,
-     * back-to-back sends (macro run, fill, fast typing) race on the shared
-     * discipline line: a CR can overtake its command (empty submit, command
-     * stuck until the NEXT CR) or chars interleave mid-line. Mutex is FIFO,
-     * so submission order is preserved.
+     * Serializes every send (line assembly + echo + pipe write). The mutex
+     * alone is NOT enough: `scope` fans out onto Dispatchers.IO, so rapid
+     * per-keystroke launches can reach the mutex in any order (observed
+     * live: fill "echo hello" landed as "echo elloh" — first char last).
+     * The single-threaded [sendScope] queues launches strictly FIFO, so
+     * submission order is preserved; the mutex stays for other callers.
      */
     private val sendMutex = kotlinx.coroutines.sync.Mutex()
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val sendScope = CoroutineScope(Dispatchers.IO.limitedParallelism(1) + SupervisorJob())
 
     override suspend fun connect(
         password: String,
@@ -163,7 +223,7 @@ class LocalShellConnection(
                 while (true) {
                     val n = p.inputStream.read(buf)
                     if (n < 0) break
-                    if (n > 0) buffer.feed(buf, 0, n)
+                    if (n > 0) sendMutex.withLock { buffer.feed(buf, 0, n) }
                 }
             } catch (_: Exception) {
             } finally {
@@ -178,7 +238,7 @@ class LocalShellConnection(
         val p = proc ?: return
         val o = stdin ?: return
         if (p.isAlive != true) return
-        scope.launch {
+        sendScope.launch {
             sendMutex.withLock {
                 try {
                     val r = discipline.input(text)

@@ -24,6 +24,14 @@ private val WIDE: BooleanArray by lazy {
     BooleanArray(0x10000) { c -> WIDE_RANGES.any { (s, e) -> c in s..e } }
 }
 
+/** Display width as rendered by [TerminalBuffer] (code point, not UTF-16 unit). */
+internal fun terminalCodePointWidth(cp: Int): Int = when {
+    cp == 0 -> 0
+    cp > 0xFFFF -> 2
+    cp in 0..0xFFFF && WIDE[cp] -> 2
+    else -> 1
+}
+
 /**
  * VT100/xterm screen model (MIT, dependency-free).
  *
@@ -73,6 +81,11 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
     private var curDim = false
     private var cursorVisible = true
     private var wrapAround = true
+    private var bracketedPasteMode = false
+
+    /** True while the server has enabled DEC private mode 2004. */
+    @get:Synchronized
+    val bracketedPaste: Boolean get() = bracketedPasteMode
     // scroll margins, 0-based inclusive, relative to the visible viewport
     private var scrollTop = 0
     private var scrollBottom = rows - 1
@@ -302,7 +315,7 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
                 k += units
                 continue
             }
-            val w = if (cp > 0xFFFF) 2 else bmpWidth(cp)
+            val w = terminalCodePointWidth(cp)
             putCells(s.substring(k, k + units), w)
             k += units
         }
@@ -336,15 +349,6 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
         }
         cursorCol += w
     }
-
-    /**
-     * Display width of a BMP code point: 2 for East Asian Wide/Fullwidth
-     * (CJK, Hangul, fullwidth forms). Ambiguous-width symbols (box drawing,
-     * braille, blocks, misc symbols like U+231A) are 1 — matching terminal
-     * fonts in non-CJK locales, so btop/htop graphics stay aligned.
-     * Combining marks are treated as 1 (safe fallback, documented).
-     */
-    private fun bmpWidth(c: Int): Int = if (c in 0..0xFFFF && WIDE[c]) 2 else 1
 
     private fun lineFeed() = newLine()
 
@@ -469,7 +473,7 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
         cursorRow = 0; cursorCol = 0
         curFg = 7; curBg = 0; curBold = false
         curReverse = false; curUnderline = false; curDim = false
-        cursorVisible = true; wrapAround = true
+        cursorVisible = true; wrapAround = true; bracketedPasteMode = false
         scrollTop = 0; scrollBottom = rows - 1
         savedRow = 0; savedCol = 0
         version++; _updates.value = version
@@ -740,9 +744,10 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
                             cursorCol = savedMainCol.coerceIn(0, cols - 1)
                         }
                         1049 -> if (on) enterAlt(clear = true, saveCursor = true) else exitAlt(restoreCursor = true)
-                        // 2004 bracketed paste, mouse 1000/1002/1003/1005/1006/1015/1016,
+                        2004 -> if (private) bracketedPasteMode = on
+                        // mouse 1000/1002/1003/1005/1006/1010/1015/1016,
                         // 12 cursor blink, 1 cursor keys — accepted, no-op.
-                        2004, 1000, 1002, 1003, 1005, 1006, 1015, 1016, 12, 1 -> Unit
+                        1000, 1002, 1003, 1005, 1006, 1010, 1015, 1016, 12, 1 -> Unit
                         else -> Unit
                     }
                 }

@@ -56,4 +56,22 @@ class SenderEditTest {
         assertEquals(1, edit.deletions)
         assertEquals("xyz", edit.sendText)
     }
+
+    @Test fun fillAfterPrefixReplacesInsteadOfDuplicating() {
+        // The reported "ececho" bug: user typed "ec", tapped suggestion
+        // "echo hi" — fill must send only the remainder ("ho hi", zero DELs
+        // since "ec" is already there), so the server line becomes exactly
+        // the suggestion instead of "ec" + "echo hi".
+        val edit = senderEdit(s + "ec", s + "echo hi")
+        assertEquals(0, edit.deletions)
+        assertEquals("ho hi", edit.sendText)
+        // diverging tail is erased first ("ec" -> "exit" = DEL + "xit")
+        val edit2 = senderEdit(s + "ec", s + "exit")
+        assertEquals(1, edit2.deletions)
+        assertEquals("xit", edit2.sendText)
+        // empty line fills whole (pure append, zero deletions)
+        assertEquals(SenderEdit("echo hi", 0), senderEdit(s, s + "echo hi"))
+        // identical content = no-op
+        assertEquals(SenderEdit("", 0), senderEdit(s + "echo hi", s + "echo hi"))
+    }
 }

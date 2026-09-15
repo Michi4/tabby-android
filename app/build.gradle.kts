@@ -122,3 +122,20 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }
+
+// Optional live SSH rig. The tests are skipped unless these environment
+// variables are present, but when they are, Gradle's test workers must see
+// them (the daemon otherwise keeps the environment from its first launch).
+val liveSshEnv = listOf(
+    "TABBY_TEST_SSH_HOST",
+    "TABBY_TEST_SSH_PORT",
+    "TABBY_TEST_SSH_USER",
+    "TABBY_TEST_SSH_PASSWORD",
+    "TABBY_TEST_SSH_KEY",
+)
+
+tasks.withType<Test>().configureEach {
+    liveSshEnv.forEach { name ->
+        System.getenv(name)?.let { environment(name, it) }
+    }
+}

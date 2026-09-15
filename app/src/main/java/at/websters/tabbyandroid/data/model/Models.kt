@@ -98,6 +98,8 @@ data class TabbyGroup(
     val id: String,
     val name: String,
     val parentId: String? = null,
+    /** Local attribution for synced groups (never uploaded). Null for legacy/manual groups. */
+    val ownerAccountId: String? = null,
 )
 
 /** A pinned host or folder. Order in the list defines display order. */

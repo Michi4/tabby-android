@@ -38,4 +38,17 @@ class TerminalEditTest {
     @Test fun emptyOld() {
         assertEquals(EditOp(0, "ls"), diffEdit("", "ls"))
     }
+
+    @Test fun supplementaryCodePointAddsWholePair() {
+        assertEquals(EditOp(0, "\uD83D\uDE00"), diffEdit("a", "a\uD83D\uDE00"))
+    }
+
+    @Test fun supplementaryCodePointDeletesOnce() {
+        assertEquals(EditOp(1, ""), diffEdit("a\uD83D\uDE00b", "ab"))
+    }
+
+    @Test fun wideAndSupplementaryReplacementsCountCodePoints() {
+        assertEquals(EditOp(1, "\uD83D\uDE00"), diffEdit("a中b", "a\uD83D\uDE00b"))
+        assertEquals(EditOp(1, "中"), diffEdit("a\uD83D\uDE00b", "a中b"))
+    }
 }

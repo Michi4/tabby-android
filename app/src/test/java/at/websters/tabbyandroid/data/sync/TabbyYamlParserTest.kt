@@ -55,4 +55,12 @@ class TabbyYamlParserTest {
     @Test fun malformedYamlDoesNotCrash() {
         assertTrue(TabbyYamlParser.parseSshProfiles(":\n: [unclosed", "o").isEmpty())
     }
+
+    @Test fun emptyConfigsAreValidButCorruptContentIsNot() {
+        assertFalse(TabbyYamlParser.isUnreadableConfigContent(""))
+        assertFalse(TabbyYamlParser.isUnreadableConfigContent("{}"))
+        assertFalse(TabbyYamlParser.isUnreadableConfigContent("version: 7\n"))
+        assertTrue(TabbyYamlParser.isUnreadableConfigContent("profiles: [unclosed"))
+        assertTrue(TabbyYamlParser.isUnreadableConfigContent("scalar"))
+    }
 }

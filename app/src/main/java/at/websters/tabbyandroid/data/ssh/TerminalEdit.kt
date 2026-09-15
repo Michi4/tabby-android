@@ -4,24 +4,40 @@ package at.websters.tabbyandroid.data.ssh
 data class EditOp(val deletions: Int, val added: String)
 
 /**
- * Diffs old vs new field text via common prefix/suffix. Pure logic, unit-tested.
- * Covers typing, backspace, mid-line edits, paste and autocorrect replacements.
+ * Diffs old vs new text at Unicode code-point boundaries and counts deletions
+ * in code points, not UTF-16 units. This keeps surrogate pairs intact and
+ * sends one DEL for one erased server-side character.
  */
 fun diffEdit(old: String, new: String): EditOp {
     var prefix = 0
-    while (prefix < old.length && prefix < new.length && old[prefix] == new[prefix]) {
-        prefix++
+    while (prefix < old.length && prefix < new.length) {
+        val co = old.codePointAt(prefix)
+        val cn = new.codePointAt(prefix)
+        if (co != cn) break
+        prefix += Character.charCount(co)
     }
     var suffix = 0
-    while (suffix < old.length - prefix && suffix < new.length - prefix &&
-        old[old.length - 1 - suffix] == new[new.length - 1 - suffix]
-    ) {
-        suffix++
+    while (suffix < old.length - prefix && suffix < new.length - prefix) {
+        val co = old.codePointBefore(old.length - suffix)
+        val cn = new.codePointBefore(new.length - suffix)
+        if (co != cn) break
+        suffix += Character.charCount(co)
     }
+    val removed = old.substring(prefix, old.length - suffix)
     return EditOp(
-        deletions = (old.length - prefix - suffix).coerceAtLeast(0),
+        deletions = codePointCount(removed),
         added = new.substring(prefix, new.length - suffix),
     )
+}
+
+private fun codePointCount(s: String): Int {
+    var i = 0
+    var n = 0
+    while (i < s.length) {
+        i += Character.charCount(s.codePointAt(i))
+        n++
+    }
+    return n
 }
 
 /**

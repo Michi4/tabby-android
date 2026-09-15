@@ -100,4 +100,21 @@ class VaultSyncTest {
         assertTrue(r is VaultSync.PullResolution.Ready)
         assertEquals(1, (r as VaultSync.PullResolution.Ready).profiles.size)
     }
+
+    @Test fun invalidRemoteConfigDoesNotResolveAsEmptyPull() {
+        val r = VaultSync.resolvePull("profiles: [unclosed", "o", null)
+        assertTrue(r is VaultSync.PullResolution.Failed)
+        assertTrue((r as VaultSync.PullResolution.Failed).message.contains("unreadable"))
+    }
+
+    @Test fun invalidRemoteConfigDoesNotBuildUploadFromEmptyMap() {
+        val r = VaultSync.buildUpload("version: 7\nprofiles: [unclosed", emptyList(), emptySet(), null)
+        assertTrue(r is VaultSync.PushResolution.Failed)
+        assertTrue((r as VaultSync.PushResolution.Failed).message.contains("unreadable"))
+    }
+
+    @Test fun emptyRemoteConfigStillUploads() {
+        val r = VaultSync.buildUpload("{}", emptyList(), emptySet(), null)
+        assertTrue(r is VaultSync.PushResolution.Ready)
+    }
 }
