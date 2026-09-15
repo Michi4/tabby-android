@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.7 (versionCode 12)
+
+### In-app updater perfected
+- **Direct in-app download** now streams the APK inside the app (OkHttp with resume-aware progress) instead of relying on DownloadManager — you always know where it is and see live `MB / MB` + percent.
+- **Auto-install, no file hunting** — as soon as the download finishes the system installer opens automatically (PackageInstaller session when possible, otherwise FileProvider + explicit package-installer targeting so a changed default APK handler can never hijack it). Unknown-sources permission is requested inline.
+- **Fully automatic if you want it** — new `Auto-download updates` switch (on by default) downloads the moment an update is found and immediately prompts to install; otherwise you tap `Update now`.
+- **Robust to edge cases** — handles redirects, verifies HTTP success + minimum size, syncs to disk, cleans old APKs, survives rotation, and shows `Download failed` with retry instead of silent stall. Already-downloaded APKs are reused instantly.
+- **Never by default app** — installer intent is explicitly targeted to the system package installer and granted to all resolvers, so changing your default APK opener can never break updates.
+
 ## 1.4.6 (versionCode 11)
 
 ### Audit hardening (from 1.4.5 review)

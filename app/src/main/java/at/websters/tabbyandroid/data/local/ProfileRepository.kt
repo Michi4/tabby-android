@@ -88,6 +88,7 @@ class ProfileRepository(private val appContext: Context) {
         private val KEY_UI_SCROLLBACK = intPreferencesKey("ui_scrollback")
         private val KEY_TAB_SCROLLBACK = stringPreferencesKey("open_tabs_scrollback_json")
         private val KEY_UPDATE_CHECK = stringPreferencesKey("update_check_json")
+        private val KEY_UPDATE_AUTO = booleanPreferencesKey("update_auto_download")
         private val KEY_VAULT_LOCK = stringPreferencesKey("vault_lock_json")
         private val KEY_VAULT_SEALED = stringPreferencesKey("vault_sealed_json")
         private val KEY_OPEN_TABS = stringPreferencesKey("open_tabs_json")
@@ -641,6 +642,14 @@ class ProfileRepository(private val appContext: Context) {
                 MapSerializer(String.serializer(), ListSerializer(String.serializer())), capped
             )
         }
+    }
+
+    val updateAutoDownload: Flow<Boolean> = appContext.tabbyStore.data.map {
+        it[KEY_UPDATE_AUTO] ?: true
+    }
+
+    suspend fun setUpdateAutoDownload(auto: Boolean) {
+        appContext.tabbyStore.edit { it[KEY_UPDATE_AUTO] = auto }
     }
 
     /** Last update check (epoch ms) + newest known release, if any. */

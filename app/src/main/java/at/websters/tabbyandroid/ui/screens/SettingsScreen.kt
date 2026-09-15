@@ -515,50 +515,15 @@ private fun KeyLayoutCard(tabsVm: TerminalTabsViewModel) {
 }
 
 /**
- * In-app updates from GitHub releases: auto-checks daily, manual check on
- * tap, one-tap download via DownloadManager + system installer prompt.
+ * In-app updates from GitHub releases: checks daily (or on tap), downloads
+ * directly inside the app with progress, then immediately opens the system
+ * installer — no need to hunt for the file. Fully automatic if auto-download is on.
  */
 @Composable
 private fun UpdatesCard(vm: UpdateViewModel) {
     val state by vm.ui.collectAsState()
+    val autoDl by vm.autoDownload.collectAsState()
     val context = LocalContext.current
-
-    // completion receiver while this screen is composed: finished download
-    // jumps straight to the installer
-    DisposableEffect(state) {
-        val recv = object : BroadcastReceiver() {
-            override fun onReceive(c: Context?, intent: Intent?) {
-                val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1) ?: return
-                if (vm.onDownloadComplete(id)) {
-                    Toast.makeText(context, "Update downloaded — opening installer", Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-        androidx.core.content.ContextCompat.registerReceiver(
-            context, recv, filter,
-            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
-        onDispose { context.unregisterReceiver(recv) }
-    }
-
-    fun onUpdate(info: at.websters.tabbyandroid.data.update.ReleaseInfo) {
-        when (vm.startDownload(info)) {
-            is UpdateViewModel.DownloadStart.AlreadyHave -> {
-                if (!vm.installApk()) {
-                    Toast.makeText(
-                        context,
-                        "Allow installs, then tap Update again",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                }
-            }
-            is UpdateViewModel.DownloadStart.Started ->
-                Toast.makeText(context, "Downloading update…", Toast.LENGTH_SHORT).show()
-            is UpdateViewModel.DownloadStart.Unavailable ->
-                Toast.makeText(context, "Couldn't start the download", Toast.LENGTH_LONG).show()
-        }
-    }
 
     Card(Modifier.fillMaxWidth()) {
         Column(
@@ -597,22 +562,77 @@ private fun UpdatesCard(vm: UpdateViewModel) {
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
                     }
-                    Button(onClick = { onUpdate(s.info) }) { Text("Update") }
+                    Button(onClick = {
+                        vm.startDownload(s.info)
+                        Toast.makeText(context, "Downloading update…", Toast.LENGTH_SHORT).show()
+                    }) { Text("Update now") }
+                    Text(
+                        "Downloads to app storage and opens installer automatically — no file hunting.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 is UpdateViewModel.Ui.Failed ->
                     Text(s.message, color = MaterialTheme.colorScheme.error)
-                is UpdateViewModel.Ui.Downloading ->
+                is UpdateViewModel.Ui.Downloading -> {
                     Text(
-                        "Downloading… progress is in the notification; the installer opens by itself.",
+                        "Downloading v${s.info.version}… ${(s.progress * 100).toInt()}%",
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { s.progress },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "Installer will open automatically when done.",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                is UpdateViewModel.Ui.ReadyToInstall -> {
+                    Text(
+                        "Downloaded v${s.info.version} — opening installer…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Button(onClick = {
+                        if (!vm.installApk(s.file)) {
+                            Toast.makeText(context, "Allow installs, then tap Install again", Toast.LENGTH_LONG).show()
+                        }
+                    }) { Text("Install now") }
+                    if (s.file.exists()) {
+                        Text(
+                            "Saved to ${s.file.name} in app storage",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                is UpdateViewModel.Ui.DownloadFailed ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(s.message, color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = { vm.check(manual = true) }) { Text("Retry") }
+                    }
             }
+            SwitchRow(
+                title = "Auto-download updates",
+                subtitle = if (autoDl) "Downloads automatically when an update is found" else "Only checks — you tap Update to download",
+                checked = autoDl,
+                onChange = vm::setAutoDownload,
+            )
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TextButton(onClick = { vm.check(manual = true) }) { Text("Check now") }
+                if (state is UpdateViewModel.Ui.ReadyToInstall) {
+                    TextButton(onClick = {
+                        if (!vm.installApk((state as UpdateViewModel.Ui.ReadyToInstall).file)) {
+                            Toast.makeText(context, "Allow installs, then tap Install again", Toast.LENGTH_LONG).show()
+                        }
+                    }) { Text("Open installer") }
+                }
             }
         }
     }
