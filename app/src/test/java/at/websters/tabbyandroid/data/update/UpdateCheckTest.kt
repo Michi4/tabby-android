@@ -19,7 +19,7 @@ class UpdateCheckTest {
     private fun releaseJson(
         tag: String = "v9.9.9",
         body: String = "notes here",
-        assets: String = """[{"name":"tabby-android-9.9.9.apk","browser_download_url":"https://example.com/a.apk"}]""",
+        assets: String = """[{"name":"tabby-android-9.9.9.apk","browser_download_url":"https://github.com/Michi4/tabby-android/releases/download/v9.9.9/a.apk"}]""",
     ) = """{"tag_name":"$tag","body":"$body","assets":$assets}"""
 
     @Test fun parseVersionTag() {
@@ -48,10 +48,18 @@ class UpdateCheckTest {
         val info = (r as UpdateState.Available).info
         assertEquals("9.9.9", info.version)
         assertEquals("v9.9.9", info.tag)
-        assertEquals("https://example.com/a.apk", info.apkUrl)
+        assertEquals("https://github.com/Michi4/tabby-android/releases/download/v9.9.9/a.apk", info.apkUrl)
         assertEquals("notes here", info.notes)
         val recorded = server.takeRequest()
         assertTrue(recorded.path!!.endsWith("/repos/Michi4/tabby-android/releases/latest"))
+    }
+
+    @Test fun disallowedHostIsFailure() = runTest {
+        val evil = """[{"name":"tabby-android-9.9.9.apk","browser_download_url":"https://evil.example/a.apk"}]"""
+        server.enqueue(MockResponse().setBody(releaseJson(assets = evil)).setResponseCode(200))
+        val r = checkForUpdate("1.0.0", base())
+        assertTrue(r is UpdateState.Failed)
+        assertTrue((r as UpdateState.Failed).message.contains("bad asset"))
     }
 
     @Test fun currentWhenSameOrOlder() = runTest {

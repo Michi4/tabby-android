@@ -124,6 +124,12 @@ class SecureTokenStorage(appContext: Context) {
         } ?: emptyList()
 
     fun saveCommandHistory(history: List<CmdEntry>) {
+        // Quarantine corrupt blob before overwriting (mirrors DataStore quarantine)
+        prefs.getString("cmd_history_json", null)?.let { raw ->
+            if (runCatching { json.decodeFromString(ListSerializer(CmdEntry.serializer()), raw) }.isFailure) {
+                prefs.edit().putString("cmd_history_json.corrupt-bak", raw).apply()
+            }
+        }
         prefs.edit()
             .putString("cmd_history_json", json.encodeToString(ListSerializer(CmdEntry.serializer()), history))
             .apply()
@@ -140,6 +146,11 @@ class SecureTokenStorage(appContext: Context) {
         } ?: emptyList()
 
     fun saveMacros(macros: List<Macro>) {
+        prefs.getString("macros_json", null)?.let { raw ->
+            if (runCatching { json.decodeFromString(ListSerializer(Macro.serializer()), raw) }.isFailure) {
+                prefs.edit().putString("macros_json.corrupt-bak", raw).apply()
+            }
+        }
         prefs.edit()
             .putString("macros_json", json.encodeToString(ListSerializer(Macro.serializer()), macros))
             .apply()

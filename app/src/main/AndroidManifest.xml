@@ -5,9 +5,10 @@
     <!-- In-app updates: install the downloaded release APK (user still confirms install) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
-    <!-- No cloud backup: this app holds SSH inventory + encrypted secrets. -->
+    <!-- No cloud backup/D2D transfer: holds SSH inventory + encrypted secrets. -->
     <application
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:label="Tabby"

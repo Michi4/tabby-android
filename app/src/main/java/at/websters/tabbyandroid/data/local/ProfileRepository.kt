@@ -305,6 +305,9 @@ class ProfileRepository(private val appContext: Context) {
         quarantineIfCorrupt(KEY_OPEN_TABS) { raw ->
             json.decodeFromString(ListSerializer(SshProfile.serializer()), raw)
         }
+        quarantineIfCorrupt(KEY_TAB_SCROLLBACK) { raw ->
+            json.decodeFromString(MapSerializer(String.serializer(), ListSerializer(String.serializer())), raw)
+        }
         val pins = this[KEY_PINS]?.let { raw ->
             runCatching {
                 json.decodeFromString(ListSerializer(Pin.serializer()), raw)
@@ -320,6 +323,16 @@ class ProfileRepository(private val appContext: Context) {
         this[KEY_OPEN_TABS] = json.encodeToString(
             ListSerializer(SshProfile.serializer()),
             tabs.filterNot { it.id in profileIds },
+        )
+        // Drop orphan scrollback (plaintext — may contain on-screen secrets)
+        val sb = this[KEY_TAB_SCROLLBACK]?.let { raw ->
+            runCatching {
+                json.decodeFromString(MapSerializer(String.serializer(), ListSerializer(String.serializer())), raw)
+            }.getOrDefault(emptyMap())
+        } ?: emptyMap()
+        this[KEY_TAB_SCROLLBACK] = json.encodeToString(
+            MapSerializer(String.serializer(), ListSerializer(String.serializer())),
+            sb.filterKeys { it !in profileIds },
         )
     }
 
@@ -454,6 +467,9 @@ class ProfileRepository(private val appContext: Context) {
         val all = vaultLockModes.first().toMutableMap()
         if (all.remove(accountId) != null) {
             appContext.tabbyStore.edit {
+                it.quarantineIfCorrupt(KEY_VAULT_LOCK) { raw ->
+                    json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), raw)
+                }
                 it[KEY_VAULT_LOCK] = json.encodeToString(MapSerializer(String.serializer(), String.serializer()), all)
             }
         }
@@ -568,6 +584,9 @@ class ProfileRepository(private val appContext: Context) {
         val all = currentRemoteHashes().toMutableMap()
         if (all.remove(accountId) != null) {
             appContext.tabbyStore.edit {
+                it.quarantineIfCorrupt(KEY_REMOTE_HASH) { raw ->
+                    json.decodeFromString(MapSerializer(String.serializer(), String.serializer()), raw)
+                }
                 it[KEY_REMOTE_HASH] = json.encodeToString(MapSerializer(String.serializer(), String.serializer()), all)
             }
         }
@@ -608,7 +627,11 @@ class ProfileRepository(private val appContext: Context) {
     }
 
     suspend fun saveOpenTabScrollback(linesByProfile: Map<String, List<String>>) {
-        val capped = linesByProfile.entries.take(10)
+        // Filter obvious secret-bearing lines (reuse same heuristic as cmd history) — scrollback is plaintext
+        val filtered = linesByProfile.mapValues { (_, lines) ->
+            lines.filterNot { isSensitiveCommand(it) }
+        }
+        val capped = filtered.entries.take(10)
             .associate { (k, v) -> k to v.takeLast(200) }
         appContext.tabbyStore.edit {
             it.quarantineIfCorrupt(KEY_TAB_SCROLLBACK) { raw ->
@@ -630,6 +653,18 @@ class ProfileRepository(private val appContext: Context) {
         val js = info?.let {
             json.encodeToString(at.websters.tabbyandroid.data.update.ReleaseInfo.serializer(), it)
         }.orEmpty()
-        appContext.tabbyStore.edit { it[KEY_UPDATE_CHECK] = "$atEpochMs|$js" }
+        appContext.tabbyStore.edit {
+            it.quarantineIfCorrupt(KEY_UPDATE_CHECK) { raw ->
+                val sep = raw.indexOf('|')
+                require(sep >= 0) { "no pipe" }
+                raw.substring(0, sep).toLong()
+                val tail = raw.substring(sep + 1)
+                if (tail.isNotBlank()) json.decodeFromString(
+                    at.websters.tabbyandroid.data.update.ReleaseInfo.serializer(), tail
+                )
+                raw
+            }
+            it[KEY_UPDATE_CHECK] = "$atEpochMs|$js"
+        }
     }
 }

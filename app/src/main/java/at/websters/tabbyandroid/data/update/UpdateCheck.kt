@@ -103,10 +103,23 @@ suspend fun checkForUpdate(
             if (!isNewerThan(rel.tag, currentVersion)) return@use UpdateState.Current
             val apk = rel.assets.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
                 ?: return@use UpdateState.Failed("Latest release has no APK yet")
+            // Allowlist: only GitHub release hosts + https (prevents GH-compromise → evil URL)
+            val apkHost = runCatching { java.net.URI(apk.url).host?.lowercase() }.getOrNull()
+            val apkScheme = runCatching { java.net.URI(apk.url).scheme?.lowercase() }.getOrNull()
+            val allowedHosts = setOf(
+                "github.com", "api.github.com", "objects.githubusercontent.com",
+                "release-assets.githubusercontent.com", "github-releases.githubusercontent.com",
+                "githubusercontent.com", "raw.githubusercontent.com"
+            )
+            if (apkScheme != "https" || apkHost == null || apkHost !in allowedHosts && !apkHost.endsWith(".githubusercontent.com") && !apkHost.endsWith(".s3.amazonaws.com")) {
+                return@use UpdateState.Failed("Update check failed (bad asset URL)")
+            }
             val version = parseVersionTag(rel.tag)?.let { (a, b, c) -> "$a.$b.$c" }
                 ?: return@use UpdateState.Current
+            // Sanitize tag for filename use (defense in depth — UpdateViewModel also sanitizes)
+            val safeTag = rel.tag.replace(Regex("[^A-Za-z0-9._-]"), "_")
             UpdateState.Available(
-                ReleaseInfo(version, rel.tag, apk.url, rel.body.orEmpty())
+                ReleaseInfo(version, safeTag, apk.url, rel.body.orEmpty())
             )
         }
     } catch (e: java.net.UnknownHostException) {

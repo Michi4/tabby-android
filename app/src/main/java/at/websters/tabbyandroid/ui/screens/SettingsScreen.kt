@@ -447,7 +447,7 @@ private fun KeyLayoutCard(tabsVm: TerminalTabsViewModel) {
             val avail = allKeyIds().filterNot { it in used }
             ExposedDropdownMenuBox(expanded = showAddKey, onExpandedChange = { showAddKey = it }) {
                 OutlinedButton(
-                    onClick = {},
+                    onClick = { if (avail.isNotEmpty()) showAddKey = !showAddKey },
                     enabled = avail.isNotEmpty(),
                     modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true),
                 ) {

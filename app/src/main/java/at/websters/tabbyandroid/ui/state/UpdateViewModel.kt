@@ -102,9 +102,10 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
     fun startDownload(info: ReleaseInfo): DownloadStart {
         return try {
             val ctx = getApplication<Application>()
+            val safeTag = info.tag.replace(Regex("[^A-Za-z0-9._-]"), "_")
             val file = File(
                 ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
-                "tabby-android-${info.tag}.apk",
+                "tabby-android-${safeTag}.apk",
             )
             pendingApk = file
             if (file.exists() && file.length() > 0) {
@@ -114,7 +115,7 @@ class UpdateViewModel(app: Application) : AndroidViewModel(app) {
             if (file.exists()) file.delete()
             val dm = ctx.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val req = DownloadManager.Request(Uri.parse(info.apkUrl))
-                .setTitle("Tabby ${info.tag}")
+                .setTitle("Tabby ${safeTag}")
                 .setDescription("Downloading update")
                 .setMimeType("application/vnd.android.package-archive")
                 .setNotificationVisibility(

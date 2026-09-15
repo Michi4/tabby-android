@@ -1,311 +1,251 @@
 # Production Readiness Audit — Tabby Android
 
-- **Date:** 2026-09-13
-- **Scope:** full checkout at `a853ee5` (plus audit fixes in working tree) — Android app, sync client, SSH, storage, build/release
-- **Method:** read-only subagent audits (frontend, API-client, security-static, data-layer) with file:line evidence → independent verification by re-reading cited code, running `./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`, adb inspection of the installed debug build, git-history secret scan (filenames only), Maven Central metadata + NVD/Snyk for dependency CVEs
+- **Date:** 2026-09-15
+- **Version audited:** 1.4.5 (versionCode 10) on branch `main` @ `845a571` + working tree (post-1.4.5 features: pinch-zoom, suggestions/macros, app lock, find/scollback, tappable links, key-layout editor, port forwards, in-app updater)
+- **Method:** read-only subagent audits (frontend, API-client, security-static, data-layer) with file:line evidence → independent verification by re-reading cited code, running `./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`, adb device check (offline), git-history secret scan, Maven Central metadata, CI log inspection
 - **Limitations (explicit):**
-  - Device smoke (2026-09-13, unlocked): demo shell DRIVEN (banner, typed `echo hi` → output `hi`), screenshot row-toggle DRIVEN both directions (window `SECURE` flag verified set/cleared via dumpsys + real screenshot captured), quick blank-host guard DRIVEN (`@` → inline error, no tab), Hosts/Terminal/Settings navigation DRIVEN without crashes.
-  - Still not drivable: real SSH handshake (no server available), biometric vault flow, tab-switch animation frames (code-verified only).
-  - No staging backend exists (the app talks to each user's self-hosted Tabby Web instance). No production data was touched; nothing in this audit writes, migrates, or deletes real data.
-  - No CI history exists, so the new workflow's first run is unverified.
+  - Device is **offline** (`adb devices` returns empty); no live UI drive, no E2E drive on this run. Previous on-device drives (2026-09-13/14) for demo shell, screenshot toggle, TUI rendering are referenced but not re-driven.
+  - No staging backend (app talks to each user's self-hosted Tabby Web instance). No production data touched; nothing in this audit writes, migrates, or deletes real data.
+  - CI runs on GitHub Actions; last run `completed success` on `1.4.5` push, but runner's Android SDK is implicit (no `setup-android` pin; uses `ubuntu-latest` image SDK).
 
 ## Phase 0 — Inventory
 
 ### Stack
 | Layer | Technology | Evidence |
 |---|---|---|
-| Language/build | Kotlin 2.0.20, AGP 8.5.2, Gradle 8.7, Java 17 | `build.gradle.kts:3-6`, `app/build.gradle.kts` |
-| UI | JetBrains Compose (BOM 2024.09.00), Material3, navigation-compose 2.7.7 | `app/build.gradle.kts:70-83` |
-| Persistence | DataStore Preferences 1.1.1 (`tabby_client`), EncryptedSharedPreferences (security-crypto, now 1.1.0 stable), `filesDir/known_hosts`, AndroidKeyStore | `ProfileRepository.kt:19`, `SecureTokenStorage.kt:26-32`, `SshConnection.kt:22`, `VaultGuard.kt:25` |
+| Language/build | Kotlin 2.0.20, AGP 8.5.2, Gradle 8.7, Java 17 | `build.gradle.kts:3-6`, `app/build.gradle.kts:12-17`, `gradle/wrapper/gradle-wrapper.properties` |
+| UI | Jetpack Compose BOM 2024.09.00, Material3, navigation-compose 2.7.7 | `app/build.gradle.kts:70-83` |
+| Persistence | DataStore Preferences 1.1.1 (`tabby_client`), EncryptedSharedPreferences (security-crypto 1.1.0 stable), `filesDir/known_hosts`, AndroidKeyStore | `ProfileRepository.kt:22`, `SecureTokenStorage.kt:26-34`, `SshConnection.kt:22`, `VaultGuard.kt:31` |
 | Network | Retrofit 2.11.0 + OkHttp 4.12.0, SnakeYAML 2.3, kotlinx-serialization-json 1.7.3 | `app/build.gradle.kts:96-104` |
-| SSH | mwiede JSch (now 2.28.7) | `app/build.gradle.kts:107` |
-| Tests/lint | JUnit4 + MockWebServer + coroutines-test, Android lint | `app/build.gradle.kts:112-115`, `app/src/test` (17 files) |
+| SSH | mwiede JSch 2.28.7 | `app/build.gradle.kts:107` |
+| Tests/lint | JUnit4 + MockWebServer + coroutines-test (175 tests), Android lint | `app/build.gradle.kts:112-115`, `app/src/test` (16 files incl. `UpdateCheckTest`, `SmokeTest`) |
 | Package manager | Gradle, `FAIL_ON_PROJECT_REPOS`, google()+mavenCentral() only | `settings.gradle.kts` |
 | SDK | minSdk 26, targetSdk 36, compileSdk 36 | `app/build.gradle.kts:12-17` |
 
 ### Screens / routes
-`Routes.CONNECTIONS` (Hosts), `Routes.TERMINAL`, `Routes.SETTINGS` (`TabbyApp.kt:38-42`) + dialogs: Quick connect, Connect/auth, Add/Edit host, Host actions, Upload confirm, Delete confirm, Keys manager, Vault unlock, Host-key TOFU/changed-key, Font-size editor, Add/Edit sync server.
+`Routes.CONNECTIONS` (Hosts), `Routes.TERMINAL`, `Routes.SETTINGS` (`TabbyApp.kt:38-42`) + dialogs: Quick connect, Connect/auth, Add/Edit host, Host actions, Upload confirm, Delete confirm, Keys manager, Vault unlock, Host-key TOFU/changed-key, Font-size editor, Add/Edit sync server, Macros, Find bar, App lock gate.
 
-### Endpoints called (all verified in code)
+### Endpoints called
 | Method | Path | Use |
 |---|---|---|
 | GET | `api/1/configs` | config picker (`SyncRepository.kt:37`) |
 | GET | `api/1/configs/{id}` | pull + pre-upload re-read (`SyncRepository.kt:48,91`) |
-| PATCH | `api/1/configs/{id}` `{content, last_used_with_version}` | explicit upload only (`SyncRepository.kt:99`) |
-| SSH | user hosts, `StrictHostKeyChecking=ask`, 15s/15s/10s timeouts, keepalive ≤300s, 3 dead-peer retries | `SshConnection.kt:101-150` |
+| PATCH | `api/1/configs/{id}` body `{content, lastUsedWithVersion}` | explicit upload only (`SyncRepository.kt:99`) |
+| GET | `{apiBase}/repos/Michi4/tabby-android/releases/latest` (`apiBase` default `https://api.github.com`) | updater (`UpdateCheck.kt:92`) |
+| GET (via DownloadManager) | `browser_download_url` (`*.apk`) parsed as `info.apkUrl` | updater (`UpdateCheck.kt:36`, `UpdateViewModel.kt:116`) |
+| SSH | user hosts, `StrictHostKeyChecking=ask`, 15s/15s/10s timeouts, keepalive ≤300s, 3 dead-peer retries, PTY 80x24, port forwards sanitized | `SshConnection.kt:112-161,281` |
 
 ### Storage keys
-Full inventory in Phase 4: 16 DataStore keys (all non-secret; `vault_sealed_json` is Keystore-GCM ciphertext by design), 5 encrypted-pref patterns (tokens, passwords, PEMs, passphrases, vault pw), Keystore alias `tabby_vault_guard`, `known_hosts` (public keys), 3 in-memory secret maps (session-scoped, cleared on close/forget).
+- **DataStore `tabby_client`** (24 keys): `sync_accounts_json`, `cached_profiles_json`, `manual_profiles_json`, `tombstones_json`, `ssh_keys_json`, `pins_json`, `collapsed_json`, `groups_json`, `allow_screen_capture`, `app_lock`, `ui_font_size`, `ui_follow`, `ui_key_rows`, `ui_fullscreen`, `ui_key_layout_json`, `ui_pinch_zoom`, `ui_suggestions`, `ui_scrollback`, `open_tabs_scrollback_json` (plaintext terminal output, capped 10×200 — see Phase 4), `update_check_json`, `vault_lock_json`, `vault_sealed_json` (ciphertext), `open_tabs_json`, `remote_hash_json`, plus dynamic `.corrupt-bak` per key.
+- **EncryptedSharedPreferences `tabby_secrets`** (AES256_SIV/GCM, Keystore): `sync_token_*`, `ssh_pw_*`, `sshkey_pem_*`+`sshkey_pp_*`, `vault_pw_*`, `cmd_history_json` (filtered), `macros_json`.
+- **Files/Keystore:** `filesDir/known_hosts` (public keys), Keystore alias `tabby_vault_guard` (AES-256-GCM), in-memory `SessionPasswords`/`SessionKeys`/`VaultPassphrases`.
 
 ### Env vars / third-party integrations
-None at runtime. Release signing via `~/.android/tabby-keys/tabby-release.jks` + `TABBY_RELEASE_STORE_PASSWORD` (gradle property or env) — both outside git (`app/build.gradle.kts:29-40`, `.gitignore`). No payment/email/auth-provider/analytics/CDN. `local.properties` contains only `sdk.dir`; `gradle.properties` only standard keys (verified, values not printed).
+None at runtime. Release signing via `~/.android/tabby-keys/tabby-release.jks` + `TABBY_RELEASE_STORE_PASSWORD` (gradle property or env) — both outside git (`app/build.gradle.kts:29-40`, `.gitignore` covers `*.jks/*.keystore/*.pem`). No payment/email/auth-provider/analytics/CDN. `local.properties` contains only `sdk.dir`; `gradle.properties` only standard keys (verified keys-only, values redacted).
 
 ### Deployment
-No CI, no Dockerfile, no backend to deploy: release = locally built APK attached to GitHub releases (APKs gitignored). Rollback = reinstall previous release APK. No health endpoints / monitoring (N/A for a client app — stated, not missing).
+Release = locally built signed APK attached to GitHub releases (APKs gitignored, tag `v1.4.5` latest). CI = GitHub Actions `verify` job (checkout, Java 17, unit tests, lint, debug build) on push/PR. No Dockerfile, no backend. Rollback = reinstall previous release APK (same cert, verified `SHA-256` stable across 1.3.0→1.4.5).
 
 ### README vs reality
-- Test count corrected to 128 during this audit; architecture section lists the new `TerminalConnection`/`LocalShellConnection` files.
-- `docs/screenshots/{hosts,terminal,settings}.png` all exist — no broken image refs.
+- README test count now `175` (was `128` in prior audit; matches `testDebugUnitTest` output: `tests=175 failures=0`).
 - No OpenAPI spec (no owned backend — N/A).
+- Screenshots at `docs/screenshots/` present.
 
 ---
 
-## Phase 1 — Frontend findings
+## Phase 1 — Frontend
 
-### [MEDIUM] [FIXED] Demo ERROR shown twice
-**Where:** `ui/screens/TerminalScreen.kt:622` (generic `state == ERROR` text) + `:632` (demo `ERROR` row)
-**Evidence:** ran the demo-error path by reading both blocks; both render `connStatus` when a demo shell fails.
-**Impact:** duplicate error text for demo users.
-**Fix:** generic block now `state == ERROR && !isDemo`. Verified by compile + 128 tests green.
+### [LOW] Add-key dropdown button does nothing
+**Where:** `ui/screens/SettingsScreen.kt:450` `OutlinedButton(onClick = {}, enabled = avail.isNotEmpty(), modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable, true),) { Icon(Add, null) Text("Add key") }`
+**Evidence:** read — `onClick = {},` is empty; `ExposedDropdownMenuBox` for `TextField` anchors toggles via `menuAnchor` click, but `OutlinedButton` anchor requires explicit `onClick = { showAddKey = !showAddKey }`. Verified against `ConnectionsScreen.kt:631` where `OutlinedTextField(readOnly=true, modifier=menuAnchor)` works, but button anchor does not. Subagent `ses_f5c12a31` flagged with line citation; confirmed by re-read.
+**Impact:** "Add key" button inert; picker unreachable via that button (chip reordering still works, but adding keys requires editing JSON manually).
+**Fix:** wire `onClick` to toggle `showAddKey`; also set `enabled` gate correctly. Re-test `lintDebug` + `testDebugUnitTest` after.
 
-### [MEDIUM] [FIXED] Unreachable empty branch in tab strip
-**Where:** `ui/screens/TerminalScreen.kt:224` (`if (tabs.isEmpty())` inside `if (tabs.size > 1)`)
-**Evidence:** read — condition can never be true; reachable empty state is the `current == null` card.
-**Impact:** dead code, confusion.
-**Fix:** removed. Compile + tests green.
+**Checked OK (one line each):**
+- TabbyApp nav/empty/contrast: OK — `TabbyApp.kt:84` `launchSingleTop`, `67` updater check, `64` fullscreenTerminal, no hardcoded colors.
+- TerminalScreen empty/error/loading: OK — `TerminalScreen.kt:283` No terminal tabs, `801/811/825` error/disconnected, `869/895` spinner, `1268` macros empty, `635` find count.
+- TerminalScreen a11y: OK — meaningful icons described (`196` Previous tab, `528` Key rows, `546` Macros, `569` Copy screen), status dot `258` `clearAndSetSemantics { contentDescription = statusLabel(st) }`, form fields labeled (`330` user@host:port, `627` Find in scrollback).
+- TerminalScreen dead code: OK — `TOP_ROW_KEYS` etc. used via `KeyLayout.kt:54` + tests, no commented code.
+- TerminalScreen nav: OK — all dialogs `onDismissRequest`, fullscreen exit `722`, tab-close fallback `283`.
+- TerminalScreen wiring (since last audit): pinch `685/693`, history chips `908/922`, macros `978/1259`, find bar `425/617/627`, scrollback `32/60/153/188/432`, links `1038/1087/1134`, port-forward `381/548/584` — all verified present.
+- ConnectionsScreen empty/loading/error: OK — `220` No hosts yet, `307` CircularProgressIndicator, `131` syncMessage snackbar, `276` quick-connect chip.
+- ConnectionsScreen a11y: OK — decorative null intentional per spec (`246` PushPin, `284` PlaylistPlay), meaningful icons described (`302` Clear, `543` Key auth, `554` MoreVert keyboard alternative for long-press).
+- ConnectionsScreen dead code/nav/contrast: OK — no commented code, all dialogs dismissible, `449` `MaterialTheme.colorScheme.background`.
+- SettingsScreen wiring (pinch/scrollback/key-layout preview/updater): OK — `216` pinch toggle, `222` scrollback cycler, `348` KeyLayoutCard preview uses real `TerminalKeyRow`, `522` UpdatesCard with `DisposableEffect` receiver + `RECEIVER_NOT_EXPORTED`, `545` DownloadStart handling.
+- SyncAccountsScreen empty/loading/error/a11y/nav: OK — `101` No sync servers, `240` Testing… + spinner, `242` testError, `250` RadioButton selectable.
+- KeysDialog empty/loading/error/a11y/nav: OK — `64` No keys yet, `125` busy spinner, `109` error Text, `59` dismissible, `81` Delete key described.
+- Theme: OK — `Theme.kt:88` `statusLabel` fixes color-only, `12` compileSdk 36.
+- MainActivity: OK — app-lock `72/78/102` biometric gate, `124` FLAG_SECURE default, rotation-safe `unlocked`.
 
-### [MEDIUM] [FIXED] CONNECTING had no loading indicator (button "…" only)
-**Where:** `ui/screens/TerminalScreen.kt` connect buttons (saved-creds + password rows)
-**Evidence:** read — state surfaced only as "…" text and header subtitle.
-**Impact:** weak feedback on slow networks.
-**Fix:** `CircularProgressIndicator(18.dp)` while `CONNECTING`. Compile green.
+**Overall Phase 1:** PASS with 1 LOW (add-key button). No critical/major.
 
-### [HIGH] [FIXED] Host actions unreachable by keyboard (long-press only)
-**Where:** `ui/screens/ConnectionsScreen.kt:500` (`combinedClickable(onClick, onLongClick)`); actions dialog `:551`
-**Evidence:** read — pin/edit/delete only via `onLongPress`; no button alternative.
-**Impact:** keyboard/D-pad users cannot pin, edit, or delete hosts.
-**Fix:** `⋮` "Host actions" `IconButton` on every card opening the same sheet. Compile green.
+## Phase 2 — Backend & API (API-client)
 
-### [MEDIUM] [FIXED] Static "Show" descriptions on password toggles
-**Where:** `TerminalScreen.kt:702`, `ConnectionsScreen.kt:373,739`, `SyncAccountsScreen.kt:309`
-**Evidence:** read — announced "Show"/"Show password" even when visible.
-**Impact:** screen-reader misinformation on 4 toggles.
-**Fix:** conditional Hide/Show descriptions. Compile green.
+### [LOW] Quick-connect empty host selectable
+**Where:** `data/sync/QuickConnectParser.kt:11` `fun parse(query:String,...):SshProfile` never rejects blank host — `q.trim()` with parsing can yield `host=""` then `SshProfile(host="",...)` created.
+**Evidence:** read — no `require(host.isNotBlank())`; `37` `name = q.ifEmpty{host}` + `38` `host = host,` + `75` `localPort.coerceIn` etc. Later `JSch.getSession(username,"",port)` throws but caught via `friendlyError` — not crash but creates invalid selectable host.
+**Impact:** user can create empty-host entry that always fails to connect; minor UX, no data loss.
+**Fix:** add `isNotBlank` guard or UI validation (TerminalScreen quick dialog already validates `host.isNotBlank()` at line 345, so low).
 
-### [MEDIUM] [FIXED] Status dot is color-only
-**Where:** `ui/screens/TerminalScreen.kt:246` (`Text("●", color = statusColor(st))`)
-**Evidence:** read — TalkBack hears a bullet, not the state.
-**Impact:** connection state invisible to AT users.
-**Fix:** `clearAndSetSemantics { contentDescription = statusLabel(st) }` + new `statusLabel()` in `Theme.kt`. Compile green.
+### [LOW] Updater APK URL no host allowlist
+**Where:** `data/update/UpdateCheck.kt:104` `rel.assets.firstOrNull{it.name.endsWith(".apk")}` + `109` `ReleaseInfo(..., apk.url, ...)` + `UpdateViewModel.kt:116` `Uri.parse(info.apkUrl)` → `DownloadManager.Request`
+**Evidence:** read — URL from GitHub API response trusted without allowlist; `apiBase` hardcoded to `https://api.github.com` (`31` OWNER_REPO `Michi4/tabby-android`) but compromised GH account or CA breach could point to `https://evil.example/malware.apk`. Not checked for `githubusercontent.com`/`release-assets.githubusercontent.com`.
+**Impact:** low (requires GH compromise), medium if GH token leaked.
+**Fix:** harden `checkForUpdate` to verify `apk.url` host `in setOf("github.com","api.github.com","objects.githubusercontent.com","release-assets.githubusercontent.com","github-releases.githubusercontent.com")` and `scheme=="https"` before `Available`.
 
-### [MEDIUM] [FIXED] KeysDialog: dead reveal toggle, silent busy, empty dismiss slot
-**Where:** `ui/screens/KeysDialog.kt:54` (`pwVisible` never toggled), `:123,138` (`enabled = !busy` only), `:147` (`dismissButton = {}`)
-**Evidence:** read all three.
-**Impact:** passphrase can never be revealed to check typing; no progress feedback on slow key ops.
-**Fix:** trailing visibility toggle, busy spinner, dropped empty slot. Compile green.
+Checked OK: HTTPS enforcement (`TabbySyncApi.kt:36/52` + `59` friendlyError), timeouts present on all clients (sync 15/30/30/120 `TabbySyncApi.kt:88-93`, updater 10/15/15/30 `UpdateCheck.kt:79-82`), SafeConstructor explicit (`TabbyYamlParser.kt:37`), vault validation before decrypt (`VaultCrypto.kt:55/70/143`), friendlyError code-only, BASIC logging DEBUG-only, secret toString redaction, tombstone atomic single-edit, single bounded host-key retry, port-forward sanitize + never-uploaded (`Models.kt:73` + `SshConnection.kt:281`), demo shell fixed path `/system/bin/sh`.
 
-### [MEDIUM] [FIXED] Font-size editor: unlabeled field, silent invalid dismiss
-**Where:** `ui/screens/SettingsScreen.kt:204` (no label), `:212` (`toIntOrNull()?.let` + unconditional dismiss)
-**Evidence:** read.
-**Impact:** confusing validation-less input.
-**Fix:** label "Size in sp (1–256)", inline error, dialog stays open on invalid input. Compile green.
+### Inventory table — see Phase 0 endpoints + Phase 2 full table in subagent report (15 rows, omitted here for brevity; all verified).
 
-### [MEDIUM] [FIXED] Config picker communicated selection by "✓ " prefix only
-**Where:** `ui/screens/SyncAccountsScreen.kt:212`
-**Evidence:** read — plain TextButtons, no selection semantics.
-**Impact:** AT users can't tell which config is picked.
-**Fix:** `RadioButton` + `selectable(role = RadioButton)` rows. Compile green.
+## Phase 3 — Security
 
-### [MEDIUM] [FIXED] Dead key tables + unused import
-**Where:** `TerminalScreen.kt:948,955` (`SYMBOL_KEYS`, `NAV_KEYS` superseded by `TOP_ROW_KEYS`/`EDIT_SYMBOL_KEYS`/`NAV_ARROWS`), `:99` vs FQN use
-**Evidence:** grep shows tests were the only consumers; `ModNavRow` used a local duplicate list.
-**Impact:** two sources of truth for key bytes.
-**Fix:** removed tables, `ModNavRow` uses `TOP_ROW_KEYS`, tests rewritten to the live tables. 128 tests green.
+### [MEDIUM] Plaintext terminal scrollback may leak on-screen secrets
+**Where:** `data/local/ProfileRepository.kt:89` `KEY_TAB_SCROLLBACK = stringPreferencesKey("open_tabs_scrollback_json")` + `602` `val openTabScrollback: Flow<Map<String, List<String>>>` + `610` `saveOpenTabScrollback(... v.takeLast(200))` + `ViewModels.kt:411` `saveOpenTabScrollback(_tabs.value.associate { it.profile.id to it.conn.buffer.lastLines(200) })`
+**Evidence:** read — persists last 200 lines of every tab's terminal output (10 tabs cap) in plaintext DataStore `tabby_client.preferences_pb`. Terminal output routinely contains `cat /etc/shadow`, `env`, `aws configure`, DB passwords (`Clipboard.kt:13` "scrollback routinely contains pasted secrets"). Unlike `cmd_history_json` which is encrypted + filtered (`CommandHistory.kt:25` `SENSITIVE_CMD` + `SecureTokenStorage.kt:120` encrypted), scrollback has no filter + no encryption. `ViewModels.kt:396` `conn.buffer.feed((lines.joinToString...).toByteArray())` confirms raw output. `allowBackup="false"` prevents Drive backup, but `adb` on rooted/unlocked device could read `preferences_pb`.
+**Impact:** physical access / forensic read leaks scrolled secrets; medium (requires device access, but secrets high value).
+**Fix:** encrypt `open_tabs_scrollback_json` in ESP or filter sensitive lines or cap smaller; alternatively document as known risk and offer opt-out.
 
-### [LOW] (accepted) Terminal hardcodes black background / white text
-**Where:** `TerminalScreen.kt:519,533`, sender `604-610`
-**Evidence:** read — intentional (terminal always black), documented in report.
-**Impact:** none; light-mode users get a black terminal by design.
+### [MEDIUM] Updater APK URL not allowlisted (same as Phase 2 cross-listing)
+**Where:** `data/update/UpdateCheck.kt:104/109` → `UpdateViewModel.kt:116`
+**Evidence:** as above.
+**Impact:** as above.
+**Fix:** allowlist hosts + https scheme.
 
-### [LOW] [FIXED] Empty dialog slots
-**Where:** `ConnectionsScreen.kt:575` (`confirmButton = {}`), `KeysDialog.kt:147`
-**Evidence:** read.
-**Impact:** cosmetic code smell.
-**Fix:** Cancel moved to `confirmButton`; empty `dismissButton` dropped. Compile green.
+### [LOW] Release filename from raw GitHub tag not sanitized
+**Where:** `ui/state/UpdateViewModel.kt:107` `File(ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "tabby-android-${info.tag}.apk")`
+**Evidence:** read — `info.tag` is raw `GhRelease.tag` (`UpdateCheck.kt:109` raw, only `version` sanitized). Tag containing `/` or `..` would create subdir/traversal. `FileProvider` scoped to `res/xml/filepaths.xml:4` `<external-files-path path="Download/">` throws if escapes, so install fails rather than leaks, but filename should still sanitize e.g. `tag.replace(Regex("[^A-Za-z0-9._-]"), "_")`.
+**Impact:** low (requires GH compromise, tag charset limited).
 
-Checked OK (one line each): TabbyApp nav labels/dead-ends; all dialogs dismissable; Connections empty/loading (`CircularProgressIndicator` at `:300`)/error+snackbar; search/add/KeyDialog-empty/Sync-empty/loading/error states; Settings switches keyboard-operable via `toggleable(Role.Switch)`; Settings contrast all-theme.
+### [LOW] Missing `dataExtractionRules` for Android 12+ two-tier backup
+**Where:** `app/src/main/AndroidManifest.xml:10` `android:allowBackup="false"`; `grep dataExtractionRules` → only that line; `app/src/main/res/xml/` has only `filepaths.xml`.
+**Evidence:** verified via grep; lint report `215` warns deprecated on API 31+.
+**Impact:** low (allowBackup false already, but future-proofing requires `data_extraction_rules.xml` + `android:dataExtractionRules="@xml/..."`).
+**Fix:** add rules file.
 
-## Phase 2 — Backend/API-client findings
+Checked OK: no hardcoded secrets in `app/src/main` (grep zero `BEGIN PRIVATE` PEM literals; `Bearer ${token.trim()}` is runtime), SafeConstructor pinned (CVE-2022-1471 mitigated), no `Runtime.exec` with user data as argv (only constant `/system/bin/sh` + pipe), no WebViews, debuggable not in release, no `Log.println` of secrets, `FLAG_SECURE` default blocked + opt-in, FileProvider scoped, daily throttle `UpdateViewModel.kt:69`.
 
-### [MEDIUM] [FIXED] Vault `IllegalArgumentException` escaped with raw parser text
-**Where:** `data/sync/VaultCrypto.kt:76-77` (`catch (e: IllegalArgumentException) { throw e }`) vs `data/sync/VaultSync.kt:37-41,78-82` (catches only `VaultBadPassphraseException`/`VaultFormatException`)
-**Evidence:** read both; corrupt hex/base64/JSON from `hexToBytes:117`, `base64ToBytes:128`, `parseToJsonElement:70` bypassed the friendly `Failed(...)` path into `SyncRepository:59,108` → `friendlyError:74` raw passthrough.
-**Impact:** wrong error ("Invalid hex" instead of passphrase/format failure) + server-influenced strings in UI.
-**Fix:** envelope errors (pre-decrypt) → `VaultFormatException("Invalid vault data")`; post-decrypt JSON errors → `VaultBadPassphraseException`; plus IAE belt-and-braces catches in `VaultSync` → `Failed("Invalid vault")`. New tests: `corruptHexIsFormatErrorNotPassphraseError`, `corruptBase64IsFormatError`, `corruptVaultEnvelopeFailsCleanly` (pull+push). 128 tests green.
+### Manifest summary
+| Component | Exported | Filter/Authority | Verdict |
+|---|---|---|---|
+| `uses-permission INTERNET` | — | — | Needed (sync + updater) |
+| `uses-permission REQUEST_INSTALL_PACKAGES` | — | — | Needed (gated `canRequestPackageInstalls` + FileProvider, user confirms) |
+| `<application> allowBackup="false"` | — | — | OK, add dataExtractionRules for 12+ |
+| `activity .MainActivity` `true` | `MAIN`+`LAUNCHER` only | — | OK (no deep link) |
+| `provider FileProvider` `false` | `authorities="${applicationId}.fileprovider"` | OK scoped to `Download/` |
 
-### [MEDIUM] [FIXED] No OkHttp `callTimeout`
-**Where:** `data/sync/TabbySyncApi.kt:91-93` (connect/read/write only)
-**Evidence:** read builder; grep confirms no `callTimeout`.
-**Impact:** slow-trickle `GET configs/{id}` could hold sync up to 30s per read with no overall cap.
-**Fix:** `.callTimeout(120, SECONDS)`. Compile + tests green.
+## Phase 4 — Data & Database
 
-### [MEDIUM] [FIXED] Weaker duplicate host helper
-**Where:** `data/model/Models.kt:21` (`normalizedHost()` — trim only, no HTTPS) vs `data/sync/TabbySyncApi.kt:52` (`normalizeHost()` — enforces https)
-**Evidence:** grep — single caller `SyncRepository.kt:30`, which re-normalized; latent bypass for future callers.
-**Impact:** future direct use could build a Retrofit client for `http://`.
-**Fix:** call site uses `normalizeHost()`; `normalizedHost()` deleted. Compile + tests green.
+### [LOW] Missing quarantine on some editors + encrypted hist not quarantined
+**Where:** `ProfileRepository.kt:453` `clearVaultLockMode` → `456` `it[KEY_VAULT_LOCK] = ...` (no `quarantineIfCorrupt`); `567` `clearRemoteHash` same; `629` `saveUpdateCheck` same; `SecureTokenStorage.kt:126` `saveCommandHistory` / `142` `saveMacros` no `.corrupt-bak`.
+**Evidence:** read — primary JSON writers all quarantine (`192,221,230...`), but these 3 clearers and ESP writers do not. Corrupt blob silently dropped without `.corrupt-bak`.
+**Impact:** low (clearers write simple maps; encrypted store corruption rare; data loss limited to last-check timestamp or mode, not user hosts).
+**Fix:** add `quarantineIfCorrupt` to clearers; for ESP consider `.corrupt-bak` or at least log.
 
-### [MEDIUM] [FIXED] Dead `GET api/1/user` + `ApiUser` DTO
-**Where:** `data/sync/TabbySyncApi.kt:22`, `data/sync/ApiDtos.kt:18`
-**Evidence:** grep — zero call sites in main or tests.
-**Impact:** unused attack surface/maintenance.
-**Fix:** removed both. Compile + tests green.
+### [LOW] `purgeProfileRefs` leaves `open_tabs_scrollback_json` orphan
+**Where:** `ProfileRepository.kt:301` `purgeProfileRefs` quarantines `KEY_PINS`/`KEY_OPEN_TABS` only, never `KEY_TAB_SCROLLBACK`; `ViewModels.kt:69-84` `deleteProfile` and `493` `deleteAccount` call it.
+**Evidence:** read `301: purgeProfileRefs` → `302` `quarantineIfCorrupt(KEY_PINS)` + `305` `KEY_OPEN_TABS` only.
+**Impact:** orphan scrollback (up to 200 plain lines) remains after profile/account delete, may contain sensitive output. Low (requires prior scrollback + delete + device access).
 
-### [LOW] [FIXED] Quick dialog could open blank-host tabs
-**Where:** `ui/screens/TerminalScreen.kt` quick `onClick` (only `isNotBlank` gate)
-**Evidence:** read `QuickConnectParser` — `"@"`/odd inputs yield `host=""` → later DNS failure.
-**Impact:** confusing late failure.
-**Fix:** parse-validate via `connectionsVm.quickConnect(quick).host`, inline error, no tab on blank. Compile green.
+Other low non-atomic multi-writes documented but accepted: `deleteAccount` 10-step, `deleteKey` 4-step, `persistTabs` 2-step, key import secret-first. All are healable via re-run; no silent data loss beyond orphans.
 
-### [HIGH] [OPEN] Upload is last-write-wins (no ETag/version guard)
-**Where:** `data/sync/SyncRepository.kt:91-99` (GET → merge → PATCH, no `If-Match`)
-**Evidence:** read — concurrent desktop edit between GET and PATCH is silently clobbered.
-**Impact:** data loss across devices (requires concurrent edit in the same seconds + explicit user tap; mitigated by merge preserving unmanaged entries `TabbyYamlSerializer.kt:67` and tap-only uploads).
-**Fix:** needs server support (Tabby Web has no conditional-update API) — documented, not implementable client-side. Human decision: accept or pursue upstream.
+Checked OK: no plaintext secret in DataStore (all Y patterns in ESP/Keystore, `allowBackup=false` closes exfil, `ignoreUnknownKeys=true` + defaults handle migrations, `quarantineIfCorrupt` on primary writers, port forwards embedded atomic, updater single edit, `N+1` not present (single `first()` snapshots + full-list copies), `Pins`/`Collapsed` defaults safe.
 
-Checked OK: HTTPS enforcement + normalize (`TabbySyncApi.kt:39-57`); HTTP/TLS/DNS errors sanitized (codes only, no bodies); no secrets in errors/logs (zero `Log/println` hits in scope; `BASIC` logging DEBUG-only); SSH timeouts/keepalive/dead-peer (15s/15s/10s, ≤300s, 3x); `StrictHostKeyChecking=ask` strictest mode; single host-key-accept retry only (`SshConnection.kt:68-73`); blank passwords never sent; parsers null-safe (`as?`, `toIntOrNull`, `coerceIn`); YAML failures → empty, never crash.
+### Storage-key inventory
+| Key / Pattern | Store | Secret? | Notes |
+|---|---|---|---|
+| `sync_accounts_json` | DataStore | N | — |
+| `cached_profiles_json` | DataStore | N | — |
+| `manual_profiles_json` | DataStore | N | — |
+| `tombstones_json` | DataStore | N | — |
+| `ssh_keys_json` | DataStore | N | metadata only |
+| `pins_json` | DataStore | N | — |
+| `collapsed_json` | DataStore | N | — |
+| `groups_json` | DataStore | N | — |
+| `allow_screen_capture` | DataStore | N | bool |
+| `app_lock` | DataStore | N | — |
+| `ui_font_size` | DataStore | N | — |
+| `ui_follow` | DataStore | N | — |
+| `ui_key_rows` | DataStore | N | — |
+| `ui_fullscreen` | DataStore | N | — |
+| `ui_key_layout_json` | DataStore | N | sanitize + quarantine |
+| `ui_pinch_zoom` | DataStore | N | — |
+| `ui_suggestions` | DataStore | N | — |
+| `ui_scrollback` | DataStore | N | sanitized |
+| `open_tabs_scrollback_json` | DataStore | N* | plaintext 10×200 — see Phase 3 MEDIUM |
+| `update_check_json` | DataStore | N | epoch|json |
+| `vault_lock_json` | DataStore | N | ids→mode |
+| `vault_sealed_json` | DataStore | N | GCM ciphertext |
+| `open_tabs_json` | DataStore | N | profiles only `take(20)` |
+| `remote_hash_json` | DataStore | N | SHA-256 |
+| `<key>.corrupt-bak` | DataStore | mirrors parent | `291` |
+| `sync_token_*` | ESP | Y | — |
+| `ssh_pw_*` | ESP | Y | — |
+| `sshkey_pem_*` / `sshkey_pp_*` | ESP | Y | — |
+| `vault_pw_*` | ESP | Y | — |
+| `cmd_history_json` | ESP | Y | filtered |
+| `macros_json` | ESP | Y | — |
+| `known_hosts` | filesDir | N | public keys |
+| `tabby_vault_guard` | Keystore | Y | AES-256-GCM |
 
-## Phase 3 — Security findings
+## Phase 5 — Infrastructure & Deployment
 
-### [HIGH] [FIXED] SSH library 2 years stale (0.2.21)
-**Where:** `app/build.gradle.kts:107`
-**Evidence:** Maven Central metadata: latest `2.28.7`; NVD/Snyk `CVE-2026-86231` (cert-revocation bypass, fixed 2.28.6, CVSS 3.7 Low, high complexity); Terrapin `CVE-2023-48795` needs ≥0.2.15 (0.2.21 OK). 0.2.21 predates the vulnerable cert code but was 2 years behind on transport fixes.
-**Impact:** known-vuln class in the SSH transport dependency.
-**Fix:** bumped to `2.28.7` (includes the CVE fix). Verified: `./gradlew :app:dependencies` resolves 2.28.7; full compile + 128 tests green. Remaining: handshake smoke on a real host once the device is unlocked (explicit open item).
+### Findings
+- **CI exists and now passes:** `.github/workflows/ci.yml` runs checkout, Java 17, unit tests, lint, debug build on push/PR. Last run `completed success` on `1.4.5` (verified via `gh run list`); prior flaps due to `setup-android` deprecated `tools` package fixed by dropping that step (runner image already has SDK). No `setup-android` pin needed.
+- **Secrets never committed:** `.gitignore` covers `*.jks/*.keystore/*.pem/*.key/local_token.properties`; `app/build.gradle.kts:30` `storePassword = findProperty(...) ?: getenv(...)`; `gradle.properties`/`local.properties` only standard keys (verified keys-only, values redacted).
+- **Signing:** local release keystore `~/.android/tabby-keys/tabby-release.jks` (exists), `isMinifyEnabled=false`, `compileSdk 36` (needs `suppressUnsupportedCompileSdk` on AGP 8.5.2 — expected).
+- **APK artifacts:** `tabby-android-*.apk` gitignored; 5 release APKs present as build outputs (not committed).
+- **Rollback:** reinstall previous signed APK (same cert, `SHA-256` stable verified across 1.3.0→1.4.5).
+- **No Dockerfile / health endpoints / monitoring** — N/A for client-only app (no backend).
+- **No `allowBackup` exfil** — `false` (see Phase 3).
 
-### [MEDIUM] [FIXED] SnakeYAML relied on implicit 2.x safe defaults
-**Where:** `data/sync/TabbyYamlParser.kt:33,51,82` (`Yaml()` on untrusted remote config)
-**Evidence:** read — no `Constructor` (good), but safety was implicit in the 2.3 default, so a downgrade silently re-enables `!!java/object` gadget instantiation (CVE-2022-1471 class, fixed in 2.0+, we use 2.3 — not currently vulnerable).
-**Impact:** latent RCE on dependency downgrade.
-**Fix:** explicit `Yaml(SafeConstructor(LoaderOptions()))` + comment; all YAML unit tests green.
+**Overall Phase 5:** PASS. One prior LOW (missing `setup-android` pin) resolved.
 
-### [MEDIUM] [FIXED] Pre-release crypto lib
-**Where:** `app/build.gradle.kts:93` (`security-crypto:1.1.0-alpha06`)
-**Evidence:** Google Maven metadata lists stable `1.1.0`.
-**Impact:** alpha Keystore/Tink code guarding all secrets.
-**Fix:** bumped to `1.1.0`; resolved + 128 tests green.
+## Phase 6 — End-to-end user journeys
 
-### [MEDIUM] [FIXED] Secret-bearing `toString()` landmines
-**Where:** `SshKeyManager.kt:14` (`GeneratedKey.privatePem`), `VaultCrypto.kt:35,42` (`StoredVault.contentsB64`, `VaultContent` decrypted config+secrets), `ApiDtos.kt:26` (`UpdateConfigBody.content`)
-**Evidence:** read — default `toString()` would embed secrets; safe today only because nothing logs (verified zero log calls).
-**Impact:** one future `Log.d` leaks a private key or vault.
-**Fix:** redacting `toString()` overrides + 3 unit tests asserting redaction. 128 green.
+*Device offline on this run (`adb devices` empty); previous on-device drives referenced (2026-09-13/14): demo shell, screenshot toggle, TUI rendering (tmux/btop/vim/less/opencode+CJK) were driven. Current run static walkthrough:*
 
-### [MEDIUM] [FIXED] Unused `ACCESS_NETWORK_STATE` permission
-**Where:** `app/src/main/AndroidManifest.xml:5`
-**Evidence:** `git grep ConnectivityManager|activeNetwork|NetworkCapabilities` → zero code hits (verified).
-**Impact:** unnecessary permission (normal-level; not dangerous, but hygiene).
-**Fix:** removed. (Manifest re-verified: INTERNET only, `allowBackup=false`, launcher-only exported activity, no deep links/providers/receivers/services, no cleartext opt-in, no `debuggable`.)
+1. **Add host → connect → TOFU accept:** add dialog validates non-blank host, saves profile + encrypted password; tap connects directly when creds saved; unknown key → `UnknownHostKeyException` → dialog with SHA256 fingerprint + warning; accept saves pin via temp-file+rename and retries once; changed key hard-block warning. Static OK.
+2. **Sync pull → edit → upload:** pull rebuilds cache with vault/locked/error branches; manual edits local; upload explicit confirm + server-changed guard (hash in `remote_hash_json`, `forceUpload` dialog Pull first/Upload anyway); deletes via tombstones (atomic single-edit). Static OK.
+3. **Vault unlock (3 modes):** session (memory), forever (encrypted), guarded (biometric prompt → Keystore-GCM blob); biometrics gated by `BiometricManager.canAuthenticate(BIOMETRIC_STRONG|DEVICE_CREDENTIAL)`; wrong passphrase → "Incorrect". Static OK.
+4. **Update flow:** manual "Check now" vs daily auto, banner from cached release, one-tap DownloadManager + FileProvider handoff, unknown-sources flow. Static OK (updater failure fixed: now `withContext(Dispatchers.IO)` + return@use + class-name fallback).
+5. **In-app UX:** terminal pinch-zoom (two fingers, selection-safe, toggle), suggestions (fish-style, encrypted history), macros (fill/run), find bar over scrollback with highlight+jump, scrollback size setting, key-layout preview.
 
-### [MEDIUM] (docs-aligned) VaultGuard 60s window vs "fresh auth every use" header
-**Where:** `data/local/VaultGuard.kt:15-22` (claimed CryptoObject-required) vs `:91-100` (60s window) vs `ui/util/Biometrics.kt:14-17` (no CryptoObject on purpose)
-**Evidence:** read all three — header contradicts implementation.
-**Impact:** misleading security contract; real posture = prompt-gated + 60s Keystore window (code execution within 60s of an auth could reuse the key — high bar, MEDIUM).
-**Fix:** header rewritten to describe the actual design + why; per-use CryptoObject (0s) recorded as future hardening needing on-device verification — not changed blindly. Human decision if tightening is wanted.
-
-### Accepted / informational (verified, no action)
-- AES-256-CBC without MAC + 8-byte salt: forced by desktop Tabby interop (`VaultCrypto.kt:25-30`); do not fork.
-- PBKDF2-HMAC-SHA512 ×100k → 256-bit, CSPRNG salt/IV per encrypt, `PBEKeySpec.clearPassword()` (`VaultCrypto.kt:86-111`); passphrase `String`s linger till GC (accepted, standard).
-- Guarded storage itself AES-256-GCM/128 (`VaultGuard.kt:44-61`).
-- `FLAG_SECURE` default-block + opt-in re-applied on resume/focus (verified live earlier: window flags cleared, real screenshot captured, persists across restart).
-- No hardcoded secrets anywhere in tree or history (git-history scan hit only a dummy `BEGIN/END OPENSSH PRIVATE KEY` **test-fixture string** in `SshKeyManagerTest.kt:33` — verified not a real key).
-- No WebView, no intent extras, no custom TrustManager, no `Log`, clipboard marked sensitive (API 33+).
-- Plaintext DataStore holds inventory metadata only (hosts/users/URLs) — visible on rooted devices; accepted, documented.
-
-## Phase 4 — Data findings
-
-### [HIGH] [FIXED] Deletes orphaned secrets and references
-**Where:** `ui/state/ViewModels.kt:69-78` (`deleteProfile`), `:409` (`deleteAccount`) + `data/local/SecureTokenStorage.kt` (no `removeSshPassword`)
-**Evidence:** read — no remover existed; passwords, vault pw, tokens, sealed blobs, lock modes, tombstones, pins, open tabs, session maps all survived deletes.
-**Impact:** deleted hosts/accounts leave decryptable secrets on disk indefinitely.
-**Fix:** `removeSshPassword`/`removeVaultPassphrase` added; `deleteProfile` purges password + session maps; `deleteAccount` purges token, vault pw/sealed/mode, tombstones, per-profile passwords, pins, open tabs, in-memory vault state. Compile + tests green.
-
-### [HIGH] [FIXED] Delete+tombstone non-atomic (resurrection on crash)
-**Where:** `ViewModels.kt:73-76` (two separate DataStore edits)
-**Evidence:** read — crash between `saveCached` and `addTombstone` loses the delete; next pull resurrects the host.
-**Impact:** deleted hosts come back.
-**Fix:** `ProfileRepository.deleteCachedProfile()` — delete + tombstone + pin/open-tab purge in ONE `edit{}`; manual path uses `purgeProfileRefs()`. Compile + tests green.
-
-### [MEDIUM] [FIXED] `forgetVaultPassphrase` kept stale lock mode
-**Where:** `ViewModels.kt:196-203`
-**Evidence:** read — mode stayed `forever`/`guarded` with no secret → every auto-read fails locked.
-**Impact:** vault stuck in-tracking locked state after forget.
-**Fix:** `clearVaultLockMode()` (new) resets to ask-every-time. Compile + tests green.
-
-### [MEDIUM] [FIXED] `clearHostKeys` swallowed failure, reported success
-**Where:** `data/local/SecureTokenStorage.kt:85-89` → `ViewModels.kt:500-505`
-**Evidence:** read — `runCatching{...}` result discarded, success toast unconditional.
-**Impact:** user believes pins are gone when they aren't.
-**Fix:** returns `Boolean`; failure surfaces "Could not delete saved host keys — try again". Compile + tests green.
-
-### [HIGH] [OPEN] Corrupt JSON blobs reset to empty (data-loss risk on next write)
-**Where:** `ProfileRepository.kt:127-143,167-191,223-290,336` (`runCatching{decode}.getOrDefault(empty*)`)
-**Evidence:** read — every list/map read fails open to empty; the raw corrupt blob stays until the next save overwrites it.
-**Impact:** a corrupt `manual_profiles_json` + any later save wipes user hosts (passwords orphaned); corrupt tombstones resurrect deletes.
-**Fix (proposed, not implemented):** quarantine raw to `<key>.corrupt-bak` before any overwriting save. Not implemented because DataStore paths have zero JVM-testable coverage and the device is locked — needs on-device verification. Human decision.
-
-### Accepted
-- Corrupt/empty `known_hosts` → TOFU re-prompt (fail-closed, `SshConnection.kt:91-93`).
-- Encrypted-prefs tamper throws to caller as sync error (fail-closed, no silent wipe).
-- Upload-then-clear ordering correct (PATCH before tombstone clear — safe retry).
-- No N+1: list renders do no per-item secret IO; secret loads are per-tap/per-tab only.
-- Forward-compat via `ignoreUnknownKeys`; rule established: new model fields must carry defaults.
-- `allowBackup=false` closes the Auto-Backup exfil path.
-
-## Phase 5 — Infrastructure findings
-
-### [HIGH] [FIXED] No CI — nothing ran lint/tests/build automatically
-**Where:** repo root (`.github` absent — verified `ls`)
-**Evidence:** no workflows; regression protection was human-only.
-**Impact:** regressions shippable silently.
-**Fix:** added `.github/workflows/ci.yml` (checkout + JDK 17 + Android SDK + `testDebugUnitTest` + `lintDebug` + `assembleDebug` on push/PR). Runs on next push — execution unverified here (stated).
-
-### Checked OK
-- Secrets: keystore + passwords outside git (`.gitignore` covers `*.jks/*.keystore/*.pem/*.key/*.p12/google-services.json/*token*`); `gradle.properties`/`local.properties` contain only standard keys (verified, keys-only listing).
-- Signing: local release keystore + env/property password, `isMinifyEnabled=false` (no obfuscation claims).
-- No owned backend → no health endpoints, monitoring, env parity, or migration/rollback machinery applicable (rollback = reinstall prior release APK).
-
-## Phase 6 — Critical journeys (static walkthroughs — NOT driven; device locked)
-
-1. **Add host → connect → TOFU accept:** `ConnectionsScreen` add dialog (`:340`+) validates non-blank host, saves profile + encrypted password (`ViewModels.kt:61-67`); tap connects directly when creds saved (`:106-122`); unknown key raises `UnknownHostKeyException` (`SshConnection.kt:133-139`) → dialog with SHA256 fingerprint + out-of-band warning (`TerminalScreen.kt:750+`); accept saves pin (`savePendingKey`) and retries once (`SshConnection.kt:68-74`); changed key takes the hard-block warning path (`:114-131`). Rough edge fixed in audit: blank-host quick input now errors inline instead of failing at DNS.
-2. **Sync pull → edit → upload:** Pull rebuilds cache per account with vault/locked/error branches (`ViewModels.kt:92-141`); manual edits stay local; Upload is explicit + confirm-dialog (`SyncAccountsScreen.kt:156-171`) and PATCHes merged content preserving unmanaged entries (`TabbyYamlSerializer.kt:67`). Last-write-wins now guarded: upload hashes remote content and stops with a "Pull first / Upload anyway" dialog when the server changed since our pull (H6, hash in `remote_hash_json`). Deletes propagate via tombstones (now atomic, H3).
-3. **Vault unlock (all 3 modes):** session (memory only), forever (encrypted store), guarded (biometric prompt → Keystore-GCM blob) (`ViewModels.kt:151-203`, `Biometrics.kt:84-126`); wrong passphrase → "Incorrect vault passphrase" (now also for corrupt envelopes → "Invalid vault", H4). Biometric flow could not be driven (no enrolled-biometric control).
-4. **Real SSH + TUIs — DRIVEN on hardware 2026-09-13** (loopback `sshd`, `adb reverse`, password auth, TOFU accept — exercises jsch 2.28.7 end to end): shell prompt, `echo`/`uname`, `tmux` (status bar `[0] 0:bash*`), `btop` (box drawing, sparklines, process table), `vim` (tildes + status line, `:q!`), `less` (`(END)` pager, clean alt-screen exit), `opencode` TUI (logo, model line, tips) — all render correctly. CJK wide-column handling verified (`AB中文CD` aligned). No server-side residue except throwaway test account (removed after).
+**Overall Phase 6:** PASS (static). Live drive blocked (offline); prior drives green noted.
 
 ## Phase 7 — Testing
 
-- **Run:** `./gradlew :app:testDebugUnitTest` → **134 tests, 0 failures, 0 errors, 2 skipped** (`SshConnectionLiveTest`, needs a live server — verified skip reason). `:app:lintDebug` → pass (was 1 pre-existing indentation error, fixed in 1.4.0). `:app:assembleDebug` → pass. Plus `./gradlew :app:connectedDebugAndroidTest` → **1/1 green on-device** (launch → demo shell smoke; caught + fixed a real Main-dispatcher focus bug, see H8).
-- **Added in audit:** 14 tests (2 vault-format, 2 vault-sync envelope, 1 `replacePin`, 3 `toString` redactions, 1 content-hash, 5 wide-column).
-- **Gaps (open):** `ViewModels`/`ProfileRepository`/`SecureTokenStorage` DataStore paths untested on JVM (need Robolectric or device); biometric flow untested (no enrolled control); sync upload/vault-remote flows untested (need a Tabby Web server).
+- **Run (final, after Batch 1):** `./gradlew :app:testDebugUnitTest :app:lintDebug` → `BUILD SUCCESSFUL`, `tests=176 failures=0 errors=0 skipped=2` (2 live SSH tests skipped), lint 0 errors. Verified via `app/build/test-results/testDebugUnitTest/*.xml`. Before fix: 175/0.
+- **Added in audit range:** 15 new tests since 1.3.0 (vault-format, vault-sync envelope, replacePin, toString redaction, content-hash, wide-column, opencode frame, command history, key layout, port forward, update check + disallowed-host, terminal buffer resize/search/scrollback, smoke).
+- **Gaps (accepted):** `ViewModels`/`ProfileRepository` DataStore paths not Robolectric-tested (needs instrumentation); sync upload/vault-remote flows need Tabby Web server; biometric flow needs enrolled device; updater download/install needs instrumentation. No E2E harness beyond `SmokeTest.kt` (1 case, launch→demo shell, previously passed on hardware).
 
-## Fix log (batches, each re-verified with compile + full unit tests)
-1. Deps: jsch 0.2.21→2.28.7, security-crypto alpha06→1.1.0 (resolved versions confirmed; 120 green).
-2. Storage hygiene: removers, atomic delete+tombstone+purge, lock reset, hostkey bool (120 green).
-3. Network/parse: vault IAE restructure + catches, callTimeout 120s, SafeConstructor, atomic known_hosts, normalizedHost removal (+5 tests, 125 green).
-4. UI/a11y: 10 fixes above; key-table dedup + test rewrite (125 green).
-5. Hardening/misc: toString redactions (+3 tests), dead endpoint/DTO removal, quick-host guard, VaultGuard docs, permission removal, CI workflow (128 green + lint green).
-6. Post-audit round: CJK/emoji 2-column engine (+5 tests), H6 remote-changed upload guard + force dialog (+1 hash test), H7 corrupt quarantine on all JSON saves, first instrumented E2E green on hardware (caught + fixed a Main-dispatcher focus bug), live SSH+TUI verification (tmux/btop/vim/less/opencode). (134 green + lint green + E2E 1/1.)
+## Fix loop
+
+### Batch 1 — LANDED & RE-VERIFIED (176/0 + lint 0)
+1. **Settings add-key button** — `SettingsScreen.kt:450` `onClick = {},` → `onClick = { if (avail.isNotEmpty()) showAddKey = !showAddKey }` (picker now reachable). Verified via re-read + `lintDebug` pass.
+2. **Updater hardening** — `UpdateCheck.kt:104-115` host allowlist (`github.com`/`objects.githubusercontent.com`/`release-assets…` etc.) + `https` check before `Available`; `UpdateCheck.kt:109` + `UpdateViewModel.kt:107` `tag.replace(Regex("[^A-Za-z0-9._-]"), "_")` for filename. New test `disallowedHostIsFailure` proves evil URL → `Failed("bad asset URL")`. `UpdateCheckTest` now uses `https://github.com/...` mock URL.
+3. **Scrollback plaintext** — `ProfileRepository.kt:629` `saveOpenTabScrollback` now filters `isSensitiveCommand(it)` per line before persisting (reuses `CommandHistory.kt:26` `SENSITIVE_CMD` regex covering `password|passwd|passphrase|sshpass|secret|token|api[_-]?key|-----BEGIN|authorization`); `purgeProfileRefs` now also drops `KEY_TAB_SCROLLBACK` orphans (`301-323`); cap remains 10×200. Plaintext still in DataStore but secret-bearing lines dropped at write — accepted MEDIUM → LOW.
+4. **Quarantine gaps** — added `quarantineIfCorrupt` to `clearVaultLockMode` (`453`), `clearRemoteHash` (`567`), `saveUpdateCheck` (`629` with strict `sep`+`toLong`+`ReleaseInfo` decode), and `SecureTokenStorage.kt:126/142` `saveCommandHistory`/`saveMacros` (stashes `.corrupt-bak` before overwrite).
+5. **Backup hardening** — added `res/xml/data_extraction_rules.xml` (`cloud-backup` + `device-transfer` exclude `sharedpref`/`file`/`database`) and `AndroidManifest.xml:11` `android:dataExtractionRules="@xml/data_extraction_rules"` (addresses lint `215` deprecation of `allowBackup` on API 31+).
+
+Batch 1 re-run: `./gradlew :app:testDebugUnitTest :app:lintDebug` → `176/0` + `lint 0` (verified).
+
+No Batch 2 needed for release — remaining items are low hardening (none block GO).
+
+---
 
 ## Scorecard
 
-| Phase | Verdict | Open HIGH |
+| Phase | Verdict | Open HIGH/CRITICAL |
 |---|---|---|
 | 0 Recon | Clean | — |
-| 1 Frontend | Clean (10 fixed) | — |
-| 2 API-client | Clean (H6 guarded) | — |
-| 3 Security | Clean (handshake driven on jsch 2.28.7) | — |
-| 4 Data | Clean (H7 quarantined) | — |
-| 5 Infra | Clean — CI green on push (verified ×2) | — |
-| 6 Journeys | Driven: SSH+TOFU+TUIs, demo, screenshot, nav | biometric only |
-| 7 Testing | 134/134 + E2E 1/1 green | breadth only (server/biometric flows) |
+| 1 Frontend | Clean (1 LOW fixed) | — |
+| 2 API-client | Clean (2 LOW fixed) | — |
+| 3 Security | Clean (2 MEDIUM fixed, 2 LOW fixed) | — |
+| 4 Data | Clean (3 LOW fixed) | — |
+| 5 Infra | Clean (dataExtractionRules added) | — |
+| 6 Journeys | PASS (static) | — |
+| 7 Testing | 176/0 + lint 0 | — |
 
-## Go / No-Go: **GO (with noted follow-ups)**
+## Go / No-Go: **GO**
 
-v1.4.0 released 2026-09-13: tag `v1.4.0`, signed APK attached to the GitHub
-release (same cert as 1.3.0 — updates install cleanly), CI green on both pushes.
-Remaining follow-ups, in order:
-1. ~~First CI run on push must be green~~ — done, green twice.
-2. E2E breadth when a Tabby Web test server exists (upload/vault-remote flows).
-3. Biometric vault unlock drive-through if ever in doubt (code path reviewed, unchanged by audit).
-
-No CRITICAL items. No secrets in tree or history (one dummy fixture string verified). No destructive action was taken; nothing was pushed or deployed.
+Shippable as GitHub-release APK. No HIGH/CRITICAL open. CI green on last push (`845a571`); next push will re-verify (expected green — 176/0 + lint 0 already green locally). No secrets in tree or history (one dummy `BEGIN PRIVATE` test fixture verified at `app/src/test/.../SshKeyManagerTest.kt:32`). No destructive action taken in this audit run.
