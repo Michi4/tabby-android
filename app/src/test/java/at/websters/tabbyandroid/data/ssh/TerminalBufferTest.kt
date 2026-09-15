@@ -327,4 +327,42 @@ class TerminalBufferTest {
         b.resize(20, 4)
         assertTrue(b.snapshot().lines.size <= 4 + 2)
     }
+
+    @Test fun snapshotIsTailOnly() {
+        val b = TerminalBuffer(cols = 20, rows = 5)
+        repeat(12) { b.feed("l$it\r\n".toByteArray()) }
+        val snap = b.snapshot()
+        assertEquals(5, snap.lines.size)
+        // 5 initial rows + 8 full-screen scrolls = 13 held; tail is l8..l11 + blank
+        assertEquals(13, b.lineCount())
+        val texts = snap.lines.map { line ->
+            line.filter { !it.wide2nd }.joinToString("") { it.ch.toString() }.trim()
+        }
+        assertTrue(texts.any { it.startsWith("l11") })
+    }
+
+    @Test fun historyWindowSitsAboveTail() {
+        val b = TerminalBuffer(cols = 20, rows = 5)
+        repeat(12) { b.feed("l$it\r\n".toByteArray()) }
+        // 13 held, tail is 5 → 8 above ([l0..l7]); window(4) = [l4..l7]
+        val win = b.historyWindow(4)
+        assertEquals(4, win.size)
+        fun text(line: List<TerminalBuffer.Cell>) =
+            line.filter { !it.wide2nd }.joinToString("") { it.ch.toString() }.trim()
+        assertTrue(text(win.first()).startsWith("l4"))
+        assertTrue(text(win.last()).startsWith("l7"))
+        // full history when max exceeds available
+        assertEquals(8, b.historyWindow(500).size)
+    }
+
+    @Test fun historyWindowEmptyWithoutHistory() {
+        val b = TerminalBuffer(cols = 20, rows = 5)
+        b.feed("hi\r\n".toByteArray())
+        assertTrue(b.historyWindow(100).isEmpty())
+        // alt screen holds exactly [rows] → no history either
+        b.feed("$ESC[?1049h".toByteArray())
+        b.feed("alt\r\n".toByteArray())
+        assertTrue(b.historyWindow(100).isEmpty())
+        assertEquals(5, b.snapshot().lines.size)
+    }
 }

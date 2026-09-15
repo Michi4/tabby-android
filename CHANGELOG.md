@@ -4,7 +4,25 @@
 
 > Note: 1.4.6–1.4.8 were pulled before shipping (their tags/releases were
 > deleted); this build is the first to ship all of the below. Phones on
-> ≤1.4.5 upgrade directly to this.
+> ≤1.4.5 upgrade directly to this. Terminal + updater + toggles all
+> verified live on-device in this build.
+
+### Terminal scrollback actually works now (the "not staying" bug, found live)
+- **You can finally scroll up into history.** The main view only ever
+  rendered the tail rows, so swiping up rubber-banded and the Follow toggle
+  did nothing observable. The last 100 scrollback lines now render above the
+  live screen in the same scroll view (find highlights work in history too).
+- **Finger scrolling fixed**: the pinch handler swallowed every drag, so
+  swipes never scrolled. New touch router: one finger drags (with fling),
+  two fingers pinch-zoom, taps/long-press/selection pass through untouched.
+- **Follow means follow**: fresh/restored tabs open on the live prompt
+  (previously stranded at the top of old history looking frozen while you
+  typed); follow tracks live across bursts, keyboard open/close and
+  rotation; dragging up or find-jumping parks the view (never yanked);
+  reaching the bottom, the ↓ button, or re-tapping Follow resumes.
+  Follow OFF truly never moves on its own.
+- Perf-safe: per-frame render stays at screen rows + a cheap plain-text
+  history window; the buffer still keeps up to your full scrollback setting.
 
 ### Updater stops interrupting you
 - **The installer never opens on its own anymore.** 1.4.7 auto-launched the

@@ -13,8 +13,6 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.rememberTransformableState
-import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -33,7 +31,9 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -73,6 +73,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -364,6 +365,39 @@ fun TerminalScreen(
     }
 }
 
+/** Scrollback lines rendered above the live screen (tuned: smooth at 144Hz). */
+private const val HISTORY_VIEW_LINES = 100
+
+/**
+ * Absolute buffer index of the first rendered line (history window + live
+ * screen). Pure, unit-tested — the find bar maps absolute hits through this.
+ */
+internal fun historyViewBase(lineCount: Int, rows: Int, histShown: Int): Int =
+    (lineCount - rows - histShown).coerceAtLeast(0)
+
+/**
+ * Back-to-live jump button: visible only while scrolled up into history.
+ * Reads scroll state in isolation so the tab body never recomposes per
+ * scroll pixel (that would re-render the whole output on every frame).
+ */
+@Composable
+private fun JumpToLiveButton(
+    scroll: ScrollState,
+    modifier: Modifier = Modifier,
+    onJump: () -> Unit,
+) {
+    // Meaningful distance only: fractional-row overflow must not pop a button.
+    // (Mirrors the stick's unpark slop, so the button and the hold agree.)
+    val slopPx = with(LocalDensity.current) { 64.dp.toPx() }
+    if (scroll.maxValue - scroll.value > slopPx) {
+        SmallFloatingActionButton(
+            onClick = onJump,
+            modifier = modifier.alpha(0.9f),
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+        ) { Icon(Icons.Filled.ArrowDownward, "Back to live output") }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TerminalTabBody(
@@ -428,21 +462,33 @@ private fun TerminalTabBody(
     var searching by remember { mutableStateOf(false) }
     var query by remember(tab.id) { mutableStateOf("") }
     var matchSel by remember(tab.id) { mutableIntStateOf(0) }
-    val scroll = rememberScrollState()
+    // ScrollState is saveable: rotation must not reset the view to the top.
+    val scroll = rememberSaveable(tab.id, saver = ScrollState.Saver) { ScrollState(0) }
+    // True once the user parks the view away from live (drag up / find jump).
+    // Cleared by anything that returns to live (FAB, follow tap, close search).
+    // This — not raw position — decides whether follow tracks aggressively.
+    var userHeld by rememberSaveable(tab.id) { mutableStateOf(false) }
 
     val snapshot = remember(version, tab.id) { tab.conn.buffer.snapshot() }
     // scrollback cap follows Settings (live)
     LaunchedEffect(prefs.scrollback, tab.id) {
         tab.conn.buffer.updateMaxScrollback(prefs.scrollback)
     }
-    // stick to bottom only while the user is already near it: reading
-    // scrolled-up history must never yank, and fitting content never jumps
+    // Live-tracking policy (follow is a per-tab runtime toggle):
+    // - follow ON + view not parked by the user → pin to live on EVERY
+    //   content/viewport change (fresh tabs, restore seeds, bursts,
+    //   keyboard open/close). A fresh/restored tab must open on the prompt,
+    //   never stranded at the top of old history.
+    // - parked (dragged up / find jump) → hold position no matter what;
+    //   reaching the bottom unparks automatically.
+    // - follow OFF → never move on its own, ever.
     val stickSlopPx = with(LocalDensity.current) { 64.dp.toPx() }
-    LaunchedEffect(version) {
-        if (follow && scroll.maxValue - scroll.value <= stickSlopPx) {
-            scroll.scrollTo(scroll.maxValue)
-        }
-    }
+            LaunchedEffect(version, scroll.maxValue) {
+                val max = scroll.maxValue
+                val v = scroll.value
+                if (v >= max - stickSlopPx) userHeld = false
+                if (follow && !userHeld && v != max) scroll.scrollTo(max)
+            }
 
     fun clearOneShots() {
         if (ctrlMode == ModMode.ONE_SHOT) ctrlMode = ModMode.OFF
@@ -539,7 +585,15 @@ private fun TerminalTabBody(
                 IconButton(onClick = { fontSize = (fontSize + 1).coerceAtMost(UiPrefsDefaults.FONT_MAX) }) {
                     Icon(Icons.Filled.TextIncrease, "Larger font")
                 }
-                FilterChip(selected = follow, onClick = { follow = !follow },
+                FilterChip(selected = follow, onClick = {
+                    val v = !follow
+                    follow = v
+                    // (Re-)enabling follow returns to live immediately.
+                    if (v) {
+                        userHeld = false
+                        scope.launch { scroll.scrollTo(scroll.maxValue) }
+                    }
+                },
                     label = { Text("Follow") },
                     leadingIcon = { Icon(Icons.Filled.VerticalAlignBottom, null) })
                 IconButton(onClick = { tabsVm.setUiFullscreen(true) }) {
@@ -603,12 +657,20 @@ private fun TerminalTabBody(
         val findTotal = matchAbs.size
         val selIdx = if (findTotal == 0) 0 else ((matchSel % findTotal) + findTotal) % findTotal
         val findShown = selIdx
-        val base = tab.conn.buffer.visibleBase()
-        val matchRows = remember(matchAbs, base) {
-            matchAbs.mapNotNull { (it - base).takeIf { r -> r in 0 until rows } }.toSet()
+        // scrollback history is rendered above the live screen, so the find
+        // bar maps absolute buffer hits through the first RENDERED line —
+        // and prev/next jumps land anywhere in history, not just the screen
+        val lineCount = remember(version, tab.id) { tab.conn.buffer.lineCount() }
+        val histCells = remember(version, tab.id) {
+            tab.conn.buffer.historyWindow(HISTORY_VIEW_LINES)
         }
-        val currentRow = matchAbs.getOrNull(selIdx)?.minus(base)
-            ?.takeIf { it in 0 until rows }
+        val viewBase = historyViewBase(lineCount, rows, histCells.size)
+        val totalRows = histCells.size + rows
+        val matchRows = remember(matchAbs, viewBase, totalRows) {
+            matchAbs.mapNotNull { (it - viewBase).takeIf { r -> r in 0 until totalRows } }.toSet()
+        }
+        val currentRow = matchAbs.getOrNull(selIdx)?.minus(viewBase)
+            ?.takeIf { it in 0 until totalRows }
         val lineHpx = with(LocalDensity.current) { (fontSize + 5).sp.toPx() }
         LaunchedEffect(query, matchSel) {
             currentRow?.let { r ->
@@ -639,13 +701,20 @@ private fun TerminalTabBody(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                IconButton(onClick = { matchSel = matchSel - 1 }) {
+                IconButton(onClick = { userHeld = true; matchSel = matchSel - 1 }) {
                     Icon(Icons.Filled.KeyboardArrowUp, "Previous match")
                 }
-                IconButton(onClick = { matchSel = matchSel + 1 }) {
+                IconButton(onClick = { userHeld = true; matchSel = matchSel + 1 }) {
                     Icon(Icons.Filled.KeyboardArrowDown, "Next match")
                 }
-                IconButton(onClick = { searching = false; query = "" }) {
+                IconButton(onClick = {
+                    searching = false
+                    query = ""
+                    // back to live right away (a parked find view must not
+                    // linger once the bar is gone)
+                    userHeld = false
+                    scope.launch { scroll.scrollTo(scroll.maxValue) }
+                }) {
                     Icon(Icons.Filled.Close, "Close search")
                 }
             }
@@ -680,20 +749,65 @@ private fun TerminalTabBody(
                 tab.conn.setPtySize(viewCols, viewRows)
             }
             val primary = MaterialTheme.colorScheme.primary
-            val rendered = remember(version, tab.id, primary, query, currentRow) {
-                renderScreen(snapshot, rows, primary, matchRows, currentRow ?: -1)
+            // screen-relative find rows (history occupies overall rows first)
+            val screenMatches = remember(matchRows, histCells.size, rows) {
+                matchRows.mapNotNull { (it - histCells.size).takeIf { r -> r in 0 until rows } }.toSet()
             }
-            // pinch-to-zoom font (two fingers only — single-finger tap,
-            // scroll and long-press selection pass through untouched)
-            val pinch = rememberTransformableState { zoomChange, _, _ ->
-                fontSize = ((fontSize * zoomChange).roundToInt())
-                    .coerceIn(UiPrefsDefaults.FONT_MIN, UiPrefsDefaults.FONT_MAX)
+            val screenCurrent = (currentRow ?: -1) - histCells.size
+            val rendered = remember(version, tab.id, primary, query, screenMatches, screenCurrent) {
+                renderScreen(snapshot, rows, primary, screenMatches, screenCurrent)
             }
+            // history renders plain (single span per line — cheap even at 100
+            // lines); only active find hits get a background highlight
+            val histRendered = remember(histCells, query, matchRows, currentRow, primary) {
+                buildAnnotatedString {
+                    histCells.forEachIndexed { i, line ->
+                        val text = buildString {
+                            line.forEach { cell -> if (!cell.wide2nd) append(cell.ch) }
+                        }
+                        if (query.isNotEmpty() && i in matchRows) {
+                            pushStyle(
+                                SpanStyle(
+                                    background = primary.copy(
+                                        alpha = if (i == currentRow) 0.45f else 0.22f
+                                    )
+                                )
+                            )
+                            append(text)
+                            pop()
+                        } else {
+                            append(text)
+                        }
+                        if (i != histCells.lastIndex) append("\n")
+                    }
+                }
+            }
+            val termStyle = TextStyle(
+                color = Color.White,
+                fontFamily = FontFamily.Monospace,
+                fontSize = fontSize.sp,
+                lineHeight = (fontSize + 5).sp,
+            )
+            val hScroll = rememberScrollState()
+            // touch routing (see terminalTouch): one finger drags scroll with
+            // fling, two fingers pinch-zoom the font; tap and long-press
+            // selection pass through untouched
             Column(
                 Modifier.fillMaxSize()
                     .background(Color.Black)
                     .padding(8.dp)
-                    .transformable(pinch, lockRotationOnZoomPan = true, enabled = prefs.pinchZoom)
+                    .terminalTouch(
+                        scroll = scroll,
+                        flingScope = scope,
+                        pinchZoomEnabled = { prefs.pinchZoom },
+                        onZoom = { zoomChange ->
+                            fontSize = ((fontSize * zoomChange).roundToInt())
+                                .coerceIn(UiPrefsDefaults.FONT_MIN, UiPrefsDefaults.FONT_MAX)
+                        },
+                        // Manual drags park the view (follow resumes only via
+                        // live-return actions, never by itself).
+                        onUserDrag = { userHeld = true },
+                    )
                     .verticalScroll(scroll)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
@@ -705,21 +819,38 @@ private fun TerminalTabBody(
                     // NEVER soft-wrap: buffer lines are exactly cols wide and
                     // must map 1:1 to visual rows (a wrapped logo/table looks
                     // "cut off", like Termius never does). Overflow scrolls
-                    // horizontally instead.
-                    Text(
-                        text = rendered,
-                        modifier = Modifier.fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        softWrap = false,
-                        style = TextStyle(
-                            color = Color.White,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = fontSize.sp,
-                            lineHeight = (fontSize + 5).sp,
-                        ),
-                    )
+                    // horizontally instead (one shared state: history + screen
+                    // columns stay aligned).
+                    Column {
+                        if (histCells.isNotEmpty()) {
+                            Text(
+                                text = histRendered,
+                                modifier = Modifier.fillMaxWidth()
+                                    .horizontalScroll(hScroll),
+                                softWrap = false,
+                                style = termStyle,
+                            )
+                        }
+                        Text(
+                            text = rendered,
+                            modifier = Modifier.fillMaxWidth()
+                                .horizontalScroll(hScroll),
+                            softWrap = false,
+                            style = termStyle,
+                        )
+                    }
                 }
             }
+            // back-to-live jump: appears only while scrolled up into history
+            // (isolated reader — the body never subscribes to scroll pixels)
+            JumpToLiveButton(
+                scroll = scroll,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp),
+                onJump = {
+                    userHeld = false
+                    scope.launch { scroll.scrollTo(scroll.maxValue) }
+                },
+            )
             if (prefs.fullscreen) {
                 // floating exit (translucent, out of the way)
                 IconButton(

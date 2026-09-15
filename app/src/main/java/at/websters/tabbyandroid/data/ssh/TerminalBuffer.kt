@@ -101,11 +101,34 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
     private fun blankCell(): Cell = Cell()
 
     @Synchronized
-    fun snapshot(): Snapshot =
-        Snapshot(active().map { it.toList() }.takeLast(rows).let { vis ->
+    fun snapshot(): Snapshot {
+        // Slice first, then copy — the deque may hold thousands of scrollback
+        // lines and only the tail window is ever rendered per frame.
+        val vis = active().takeLast(rows).map { it.toList() }
+        return Snapshot(
             // main may hold scrollback; alt is exactly [rows]
-            if (!altActive) vis.takeLast(rows) else vis
-        }, cursorRow, cursorCol, version, cursorVisible)
+            if (!altActive) vis.takeLast(rows) else vis,
+            cursorRow, cursorCol, version, cursorVisible,
+        )
+    }
+
+    /** Total lines held (live tail window + scrollback above it). */
+    @Synchronized
+    fun lineCount(): Int = active().size
+
+    /**
+     * Up to [max] scrollback lines sitting directly above the live tail
+     * window (oldest → newest), for the scrollable history view. Empty on the
+     * alt screen (exactly [rows], no scrollback) and when there is no history
+     * yet. Copies only the window — never the whole deque.
+     */
+    @Synchronized
+    fun historyWindow(max: Int): List<List<Cell>> {
+        val all = active()
+        val end = (all.size - rows).coerceAtLeast(0)
+        val start = (end - max.coerceAtLeast(0)).coerceAtLeast(0)
+        return (start until end).map { all[it].toList() }
+    }
 
     /** DSR/CPR replies queued since the last call (connection writes them back). */
     @Synchronized
