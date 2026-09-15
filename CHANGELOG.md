@@ -1,6 +1,10 @@
 # Changelog
 
-## 1.4.8 (versionCode 13)
+## 1.4.9 (versionCode 14)
+
+> Note: 1.4.6–1.4.8 were pulled before shipping (their tags/releases were
+> deleted); this build is the first to ship all of the below. Phones on
+> ≤1.4.5 upgrade directly to this.
 
 ### Updater stops interrupting you
 - **The installer never opens on its own anymore.** 1.4.7 auto-launched the
