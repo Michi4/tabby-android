@@ -17,6 +17,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -1066,34 +1067,43 @@ private fun TerminalTabBody(
 
         // ---- history suggestions (tap a chip to fill the line for review;
         // frequency-ranked, learned from submitted commands, toggle in Settings)
+        // Fixed height ALWAYS: chips fading in/out must never resize the
+        // terminal viewport — every height change is a SIGWINCH and the
+        // server reprints the prompt line for each one (scrollback fills
+        // with duplicated prompts while typing).
         val currentLine = input.text.replace(SENDER_SENTINEL, "")
         val suggestions = remember(currentLine, histTick) {
             if (!prefs.suggestions) emptyList()
             else at.websters.tabbyandroid.data.local.rankSuggestions(tabsVm.loadHistory(), currentLine)
         }
-        AnimatedVisibility(
-            visible = suggestions.isNotEmpty(),
-            enter = expandVertically(tween(180)) + fadeIn(tween(180)),
-            exit = shrinkVertically(tween(180)) + fadeOut(tween(180)),
+        Box(
+            Modifier.fillMaxWidth().height(36.dp).padding(horizontal = 4.dp),
+            contentAlignment = Alignment.CenterStart,
         ) {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            androidx.compose.animation.AnimatedVisibility(
+                visible = suggestions.isNotEmpty(),
+                enter = fadeIn(tween(180)),
+                exit = fadeOut(tween(180)),
             ) {
-                suggestions.forEach { s ->
-                    AssistChip(
-                        onClick = { fillLine(s) },
-                        label = {
-                            Text(
-                                s,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 12.sp,
-                            )
-                        },
-                    )
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    suggestions.forEach { s ->
+                        AssistChip(
+                            onClick = { fillLine(s) },
+                            label = {
+                                Text(
+                                    s,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 12.sp,
+                                )
+                            },
+                        )
+                    }
                 }
             }
         }

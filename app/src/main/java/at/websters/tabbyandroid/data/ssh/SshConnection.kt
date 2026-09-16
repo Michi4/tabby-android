@@ -9,6 +9,8 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.Properties
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -81,13 +83,23 @@ class SshConnection(
      * output is being written: a main-thread window-change racing channel
      * data corrupted the outgoing stream (server saw an unknown packet and
      * closed the session). Keep those side effects on one worker.
+     *
+     * Window-change requests are additionally DEBOUNCED: every terminal
+     * viewport change (keyboard, suggestion chips, key rows, rotation) would
+     * otherwise send SIGWINCH, and the server's line editor reprints the
+     * prompt + current line on a fresh line for each one — typing one word
+     * then fills scrollback with duplicated prompts. Only the settled size
+     * goes out, at most once per quiet period.
      */
-    private val networkExecutor = Executors.newSingleThreadExecutor { runnable ->
+    private val networkExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "tabby-ssh-network").apply {
             isDaemon = true
         }
     }
     @Volatile private var networkClosed = false
+    @Volatile private var pendingResize: ScheduledFuture<*>? = null
+    @Volatile private var lastSentCols = -1
+    @Volatile private var lastSentRows = -1
 
     private fun writeStdin(bytes: ByteArray) {
         val input = shellInput ?: return
@@ -193,6 +205,11 @@ class SshConnection(
         ch.connect(10_000)
         session = s
         channel = ch
+        // Channel opened at the current pty size; later setPtySize calls only
+        // send what actually changed. Reconnect reuses this object, so reset.
+        networkClosed = false
+        lastSentCols = ptyCols
+        lastSentRows = ptyRows
         _state.value = SshState.CONNECTED
         _status.value = "Connected"
         startForwards()
@@ -279,12 +296,22 @@ class SshConnection(
         ptyRows = rows.coerceIn(10, 200)
         if (networkClosed) return
         try {
-            networkExecutor.execute {
+            // Coalesce bursts (typing churns the viewport via keyboard,
+            // chips and key rows): only the settled size is sent, once.
+            pendingResize?.cancel(false)
+            pendingResize = networkExecutor.schedule({
                 try {
-                    channel?.setPtySize(ptyCols, ptyRows, 0, 0)
+                    val ch = channel
+                    if (!networkClosed && ch != null && ch.isConnected &&
+                        (ptyCols != lastSentCols || ptyRows != lastSentRows)
+                    ) {
+                        ch.setPtySize(ptyCols, ptyRows, 0, 0)
+                        lastSentCols = ptyCols
+                        lastSentRows = ptyRows
+                    }
                 } catch (_: Exception) {
                 }
-            }
+            }, 400, TimeUnit.MILLISECONDS)
         } catch (_: Exception) {
         }
     }
@@ -358,12 +385,15 @@ class SshConnection(
 
     override fun close() {
         networkClosed = true
+        try { pendingResize?.cancel(false) } catch (_: Exception) {}
+        pendingResize = null
         try { readerJob?.cancel() } catch (_: Exception) {}
         try { shellInput?.close() } catch (_: Exception) {}
         try { stopForwards() } catch (_: Exception) {}
         try { channel?.disconnect() } catch (_: Exception) {}
         try { session?.disconnect() } catch (_: Exception) {}
-        try { networkExecutor.shutdown() } catch (_: Exception) {}
+        // NOTE: networkExecutor stays alive — the same connection object can
+        // reconnect (Reconnect button), which resets networkClosed above.
         _state.value = SshState.DISCONNECTED
     }
 }
