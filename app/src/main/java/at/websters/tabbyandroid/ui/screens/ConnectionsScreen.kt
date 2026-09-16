@@ -186,7 +186,7 @@ fun ConnectionsScreen(
         pinControls: PinControls?,
         prune: Set<String>,
     ) {
-        val isCollapsed = !forceExpand && node.key in collapsed
+        val isCollapsed = !forceExpand && state.query.isBlank() && node.key in collapsed
         stickyHeader(key = "f:${if (forceExpand) "pin:" else ""}${node.key}") {
             SectionHeader(
                 title = node.name,

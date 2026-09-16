@@ -70,6 +70,20 @@ class FolderTreeTest {
         assertEquals(1, f.roots.size)
     }
 
+    @Test fun literalNullOrBlankGroupIsUngrouped() {
+        val f = buildForest(
+            listOf(
+                p("1", "null-folder", "null"),
+                p("2", "blank-folder", "  "),
+                p("3", "null-name", "zzz", "null"),
+            ),
+            emptyList(),
+        )
+        assertEquals(listOf("blank-folder", "null-folder"), f.ungrouped.map { it.name })
+        assertEquals(1, f.roots.size)
+        assertEquals("zzz", f.roots[0].name)
+    }
+
     @Test fun findNodeAndIds() {
         val groups = listOf(TabbyGroup("a", "A"), TabbyGroup("b", "B", parentId = "a"))
         val f = buildForest(listOf(p("1", "h", "b")), groups)

@@ -116,7 +116,8 @@ object TabbyYamlParser {
         val port = (options["port"] as? Number)?.toInt() ?: 22
         val user = (options["user"] as? String)?.trim().takeUnless { it.isNullOrEmpty() } ?: "root"
         val auth = (options["auth"] as? String)?.trim().takeUnless { it.isNullOrEmpty() } ?: "password"
-        val group = raw["group"] as? String
+        val group = (raw["group"] as? String)
+            ?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
         val color = raw["color"] as? String
         val id = (raw["id"] as? String)?.trim().takeUnless { it.isNullOrEmpty() }
             ?: "tabby:${name.hashCode()}:$host:$port:$user"

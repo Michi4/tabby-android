@@ -1,5 +1,6 @@
 package at.websters.tabbyandroid.data.sync
 
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -45,6 +46,11 @@ class VaultCryptoTest {
         assertEquals(1, groups.size)
         assertEquals("Vector", groups[0].name)
         assertEquals(1, content.secrets.size)
+    }
+
+    @Test fun jsonNullStaysNullInsteadOfStringNull() {
+        assertNull(JsonNull.toPlain())
+        assertEquals("x", JsonPrimitive("x").toPlain())
     }
 
     @Test fun wrongPassphraseFails() {

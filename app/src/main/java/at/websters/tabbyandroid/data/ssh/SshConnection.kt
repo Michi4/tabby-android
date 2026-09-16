@@ -8,6 +8,7 @@ import com.jcraft.jsch.Session
 import java.io.File
 import java.security.MessageDigest
 import java.util.Properties
+import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -74,6 +75,19 @@ class SshConnection(
      * pipe writes so a single logical write+flush cannot interleave.
      */
     private val ioLock = Any()
+
+    /**
+     * JSch channel requests must not run on arbitrary UI threads while shell
+     * output is being written: a main-thread window-change racing channel
+     * data corrupted the outgoing stream (server saw an unknown packet and
+     * closed the session). Keep those side effects on one worker.
+     */
+    private val networkExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "tabby-ssh-network").apply {
+            isDaemon = true
+        }
+    }
+    @Volatile private var networkClosed = false
 
     private fun writeStdin(bytes: ByteArray) {
         val input = shellInput ?: return
@@ -263,8 +277,14 @@ class SshConnection(
     override fun setPtySize(cols: Int, rows: Int) {
         ptyCols = cols.coerceIn(20, 300)
         ptyRows = rows.coerceIn(10, 200)
+        if (networkClosed) return
         try {
-            channel?.setPtySize(ptyCols, ptyRows, 0, 0)
+            networkExecutor.execute {
+                try {
+                    channel?.setPtySize(ptyCols, ptyRows, 0, 0)
+                } catch (_: Exception) {
+                }
+            }
         } catch (_: Exception) {
         }
     }
@@ -337,11 +357,13 @@ class SshConnection(
     private val activeForwards = mutableListOf<at.websters.tabbyandroid.data.model.PortForward>()
 
     override fun close() {
+        networkClosed = true
         try { readerJob?.cancel() } catch (_: Exception) {}
         try { shellInput?.close() } catch (_: Exception) {}
         try { stopForwards() } catch (_: Exception) {}
         try { channel?.disconnect() } catch (_: Exception) {}
         try { session?.disconnect() } catch (_: Exception) {}
+        try { networkExecutor.shutdown() } catch (_: Exception) {}
         _state.value = SshState.DISCONNECTED
     }
 }

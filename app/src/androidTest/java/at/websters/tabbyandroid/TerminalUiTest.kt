@@ -46,11 +46,10 @@ class TerminalUiTest {
     private fun openDemoShell() {
         compose.onNodeWithText("Hosts").assertIsDisplayed()
         compose.onNodeWithText("Terminal").performClick()
-        if (compose.onAllNodesWithText("Demo shell", substring = true)
+        if (compose.onAllNodesWithText("Local demo shell", substring = true)
                 .fetchSemanticsNodes().isEmpty()
         ) {
-            compose.onNodeWithContentDescription("New tab").performClick()
-            compose.onNodeWithText("Try the demo shell (no server)").performClick()
+            compose.onNodeWithText("Demo shell").performClick()
         }
         compose.waitUntil(timeoutMillis = 15_000) {
             compose.onAllNodesWithText("Demo shell", substring = true)

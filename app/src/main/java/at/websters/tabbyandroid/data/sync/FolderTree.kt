@@ -22,13 +22,17 @@ data class FolderNode(
 
 data class Forest(val roots: List<FolderNode>, val ungrouped: List<SshProfile>)
 
+/** Blank or literal-"null" group ids/names are missing data, never folders. */
+private fun normGroup(value: String?): String? =
+    value?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+
 fun buildForest(profiles: List<SshProfile>, groups: List<TabbyGroup>): Forest {
     val known = groups.associateBy { it.id }
     val byName = Comparator<FolderNode> { a, b -> a.name.lowercase().compareTo(b.name.lowercase()) }
 
     val profilesByGroup: Map<String, List<SshProfile>> = profiles
-        .filter { it.group != null }
-        .groupBy { it.group!! }
+        .mapNotNull { p -> normGroup(p.group)?.let { it to p } }
+        .groupBy({ it.first }, { it.second })
         .mapValues { (_, v) -> v.sortedBy { it.name.lowercase() } }
 
     // children per parent (only when the parent is known, else the group is a root)
@@ -71,8 +75,9 @@ fun buildForest(profiles: List<SshProfile>, groups: List<TabbyGroup>): Forest {
 
     // profiles pointing at unknown group ids -> virtual folders by display name
     val virtuals = profiles
-        .filter { it.group != null && it.group !in known }
-        .groupBy { it.groupName?.takeIf { n -> n.isNotBlank() } ?: it.group!! }
+        .mapNotNull { p -> normGroup(p.group)?.let { gid -> Triple(gid, p, normGroup(p.groupName)) } }
+        .filter { (gid, _, _) -> gid !in known }
+        .groupBy({ (gid, _, name) -> name ?: gid }, { (_, p, _) -> p })
         .toList()
         .sortedBy { (name, _) -> name.lowercase() }
         .map { (name, members) ->
@@ -87,7 +92,7 @@ fun buildForest(profiles: List<SshProfile>, groups: List<TabbyGroup>): Forest {
         }
 
     val ungrouped = profiles
-        .filter { it.group == null }
+        .filter { normGroup(it.group) == null }
         .sortedBy { it.name.lowercase() }
 
     return Forest((realRoots + reRooted + virtuals).sortedWith(byName), ungrouped)

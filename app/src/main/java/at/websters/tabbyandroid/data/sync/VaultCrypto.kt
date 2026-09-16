@@ -162,6 +162,7 @@ fun JsonObject.toPlainMap(): Map<String, Any?> =
 fun JsonArray.toPlainList(): List<Any?> = map { it.toPlain() }
 
 fun JsonElement.toPlain(): Any? = when (this) {
+    is JsonNull -> null
     is JsonObject -> toPlainMap()
     is JsonArray -> toPlainList()
     is JsonPrimitive -> when {

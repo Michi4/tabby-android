@@ -52,6 +52,13 @@ class TabbyYamlParserTest {
         assertEquals("root", out[0].username)
     }
 
+    @Test fun literalNullGroupIsUngrouped() {
+        val yaml = "profiles:\n  - type: ssh\n    name: h\n    group: 'null'\n    options:\n      host: example.com\n"
+        val out = TabbyYamlParser.parseSshProfiles(yaml, "o")
+        assertEquals(1, out.size)
+        assertNull(out[0].group)
+    }
+
     @Test fun malformedYamlDoesNotCrash() {
         assertTrue(TabbyYamlParser.parseSshProfiles(":\n: [unclosed", "o").isEmpty())
     }
