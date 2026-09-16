@@ -84,12 +84,14 @@ class SshConnection(
      * data corrupted the outgoing stream (server saw an unknown packet and
      * closed the session). Keep those side effects on one worker.
      *
-     * Window-change requests are additionally DEBOUNCED: every terminal
-     * viewport change (keyboard, suggestion chips, key rows, rotation) would
-     * otherwise send SIGWINCH, and the server's line editor reprints the
-     * prompt + current line on a fresh line for each one — typing one word
-     * then fills scrollback with duplicated prompts. Only the settled size
-     * goes out, at most once per quiet period.
+     * Window-change requests are additionally COALESCEDED: terminal
+     * viewport churn (keyboard slide animation frames, rotation, font
+     * changes) would otherwise send a SIGWINCH per frame, and the server's
+     * line editor reprints the prompt + current line on a fresh line for
+     * each one — typing one word then fills scrollback with duplicated
+     * prompts. Isolated changes (keyboard toggled after idle) go out
+     * INSTANTLY so the terminal never freezes ~500ms; bursts collapse into
+     * one leading + one settled request.
      */
     private val networkExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "tabby-ssh-network").apply {
@@ -100,6 +102,7 @@ class SshConnection(
     @Volatile private var pendingResize: ScheduledFuture<*>? = null
     @Volatile private var lastSentCols = -1
     @Volatile private var lastSentRows = -1
+    @Volatile private var lastResizeSentAt = 0L
 
     private fun writeStdin(bytes: ByteArray) {
         val input = shellInput ?: return
@@ -296,22 +299,32 @@ class SshConnection(
         ptyRows = rows.coerceIn(10, 200)
         if (networkClosed) return
         try {
-            // Coalesce bursts (typing churns the viewport via keyboard,
-            // chips and key rows): only the settled size is sent, once.
             pendingResize?.cancel(false)
+            // Isolated change (e.g. keyboard toggled after idle): send NOW so
+            // the terminal reacts instantly. Bursts (animation frames) fall
+            // through to one trailing settled request. Both run on the single
+            // network worker — channel requests must never run on UI threads.
+            if (System.currentTimeMillis() - lastResizeSentAt >= 700) {
+                networkExecutor.execute { sendPtySizeNow() }
+            }
             pendingResize = networkExecutor.schedule({
-                try {
-                    val ch = channel
-                    if (!networkClosed && ch != null && ch.isConnected &&
-                        (ptyCols != lastSentCols || ptyRows != lastSentRows)
-                    ) {
-                        ch.setPtySize(ptyCols, ptyRows, 0, 0)
-                        lastSentCols = ptyCols
-                        lastSentRows = ptyRows
-                    }
-                } catch (_: Exception) {
-                }
-            }, 400, TimeUnit.MILLISECONDS)
+                sendPtySizeNow()
+            }, 250, TimeUnit.MILLISECONDS)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun sendPtySizeNow() {
+        try {
+            val ch = channel
+            if (!networkClosed && ch != null && ch.isConnected &&
+                (ptyCols != lastSentCols || ptyRows != lastSentRows)
+            ) {
+                ch.setPtySize(ptyCols, ptyRows, 0, 0)
+                lastSentCols = ptyCols
+                lastSentRows = ptyRows
+                lastResizeSentAt = System.currentTimeMillis()
+            }
         } catch (_: Exception) {
         }
     }
