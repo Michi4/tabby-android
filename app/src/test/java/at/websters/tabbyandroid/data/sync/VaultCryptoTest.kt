@@ -225,4 +225,44 @@ class VaultCryptoTest {
     @Test fun absentVaultBlockIsMissing() {
         assertTrue(VaultCrypto.examineEnvelope(emptyMap<String, Any?>()) is VaultCrypto.VaultEnvelope.Missing)
     }
+
+    @Test fun rescueExtractsBareHex() {
+        val raw = "vault:\n  version: 1\n  keySalt: 1234567890123e45\n  iv: 9af1\n"
+        assertEquals("1234567890123e45", VaultCrypto.rescueRawScalar(raw, "keySalt"))
+    }
+
+    @Test fun rescueStripsCommentSuffix() {
+        val raw = "vault:\n  keySalt: 1234567890123e45 # left unquoted\n"
+        assertEquals("1234567890123e45", VaultCrypto.rescueRawScalar(raw, "keySalt"))
+    }
+
+    @Test fun rescueTakesLastOnDuplicates() {
+        val raw = "vault:\n  keySalt: .inf\n  keySalt: 1234567890123e45\n"
+        assertEquals("1234567890123e45", VaultCrypto.rescueRawScalar(raw, "keySalt"))
+    }
+
+    @Test fun rescueNullWhenAbsent() {
+        assertNull(VaultCrypto.rescueRawScalar("vault:\n  version: 1\n", "keySalt"))
+    }
+
+    @Test fun rescueFindsDestroyedTextButEnvelopeStillRejects() {
+        // Extraction succeeds (`.inf` IS the literal text) but plausibility
+        // rejects it, so the envelope stays Corrupt with backup guidance.
+        val raw = "vault:\n  version: 1\n  contents: dGVzdA==\n  keySalt: .inf\n  iv: 9af1497337f8d598ceffcb75ee597c6e\n"
+        assertEquals(".inf", VaultCrypto.rescueRawScalar(raw, "keySalt"))
+        val map = TabbyYamlParser.loadContentMap(raw)!!
+        val env = VaultCrypto.examineEnvelope(map, raw)
+        assertTrue("expected Corrupt, got $env", env is VaultCrypto.VaultEnvelope.Corrupt)
+    }
+
+    @Test fun intactHexSaltEnvelopeValidViaRaw() {
+        // Parsed map holds a Double (like SnakeYAML produces for unquoted
+        // hex), raw text holds the intact value → Valid with rescued salt.
+        val raw = "vault:\n  version: 1\n  contents: dGVzdA==\n  keySalt: 1234567890123e45\n  iv: 9af1497337f8d598ceffcb75ee597c6e\n"
+        val map = TabbyYamlParser.loadContentMap(raw)!!
+        assertTrue(map["vault"] is Map<*, *> && (map["vault"] as Map<*, *>)["keySalt"] is Number)
+        val env = VaultCrypto.examineEnvelope(map, raw)
+        assertTrue("expected Valid, got $env", env is VaultCrypto.VaultEnvelope.Valid)
+        assertEquals("1234567890123e45", (env as VaultCrypto.VaultEnvelope.Valid).stored.saltHex)
+    }
 }

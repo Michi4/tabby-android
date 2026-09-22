@@ -26,8 +26,9 @@ object VaultSync {
         if (parsed.isNotEmpty()) {
             return PullResolution.Ready(parsed, groups)
         }
-        // no cleartext profiles: maybe a fully-encrypted vault
-        return when (val env = VaultCrypto.examineEnvelope(remoteMap)) {
+        // no cleartext profiles: maybe a fully-encrypted vault. The raw text
+        // travels along so number-damaged scalars can be rescued from it.
+        return when (val env = VaultCrypto.examineEnvelope(remoteMap, content)) {
             is VaultCrypto.VaultEnvelope.Missing -> PullResolution.Ready(emptyList(), emptyList())
             is VaultCrypto.VaultEnvelope.Corrupt -> PullResolution.Failed(env.message)
             is VaultCrypto.VaultEnvelope.Valid -> {
@@ -74,7 +75,7 @@ object VaultSync {
             return PushResolution.Failed("Server config is unreadable YAML")
         }
         val remoteMap = TabbyYamlParser.loadContentMap(remoteContent)
-        return when (val env = remoteMap?.let { VaultCrypto.examineEnvelope(it) }) {
+        return when (val env = remoteMap?.let { VaultCrypto.examineEnvelope(it, remoteContent) }) {
             null, is VaultCrypto.VaultEnvelope.Missing -> PushResolution.Ready(
                 TabbyYamlSerializer.merge(remoteContent, localProfiles, tombstoneIds)
             )

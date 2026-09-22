@@ -119,19 +119,21 @@ class VaultSyncTest {
     }
 
     @Test fun numericSaltUploadRefusesInsteadOfCleartextMerge() {
-        // SnakeYAML loads unquoted "12e34…" as Double, so parseStored fails.
-        // Must be Failed (never a cleartext merge over the vault).
+        // Genuinely destroyed salt (a re-saved float, not intact hex): rescue
+        // is impossible. Must be Failed (never a cleartext merge over the
+        // vault), naming the field and pointing at backups.
         val yaml = """
             vault:
               version: 1
               contents: dGVzdA==
-              keySalt: 12e34000000000000
+              keySalt: 1.2e+35
               iv: 9af1497337f8d598ceffcb75ee597c6e
             encrypted: true
         """.trimIndent()
         val r = VaultSync.buildUpload(yaml, emptyList(), emptySet(), "pw")
         assertTrue("expected Failed, got $r", r is VaultSync.PushResolution.Failed)
-        assertTrue((r as VaultSync.PushResolution.Failed).message.contains("Invalid vault"))
+        val msg = (r as VaultSync.PushResolution.Failed).message
+        assertTrue(msg, msg.contains("Invalid vault") && msg.contains("keySalt") && msg.contains("backup"))
     }
 
     @Test fun numericSaltPullFailsInsteadOfEmpty() {
@@ -139,7 +141,7 @@ class VaultSyncTest {
             vault:
               version: 1
               contents: dGVzdA==
-              keySalt: 12e34000000000000
+              keySalt: 1.2e+35
               iv: 9af1497337f8d598ceffcb75ee597c6e
             encrypted: true
         """.trimIndent()
@@ -148,6 +150,59 @@ class VaultSyncTest {
         // …and the message must name the damaged field and point at backups
         val msg = (r as VaultSync.PullResolution.Failed).message
         assertTrue(msg, msg.contains("keySalt") && msg.contains("number") && msg.contains("backup"))
+    }
+
+    /**
+     * The user's exact scenario: a writer saved the TRUE salt unquoted, so
+     * YAML loads a Double — but the literal `12e34…` text is intact. The
+     * vault must OPEN, not fail. Vault bytes are built here with the same
+     * algorithm desktop uses (PBKDF2-SHA512 x100000, AES-256-CBC).
+     */
+    private fun rawVaultYaml(saltHex: String, ivHex: String, pw: String, profileName: String): String {
+        fun hex(s: String): ByteArray =
+            s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA512")
+        val key = factory.generateSecret(
+            javax.crypto.spec.PBEKeySpec(pw.toCharArray(), hex(saltHex), 100000, 256)
+        ).encoded
+        val cipher = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(
+            javax.crypto.Cipher.ENCRYPT_MODE,
+            javax.crypto.spec.SecretKeySpec(key, "AES"),
+            javax.crypto.spec.IvParameterSpec(hex(ivHex)),
+        )
+        val inner = """{"config":{"profiles":[{"type":"ssh","name":"$profileName","options":{"host":"example.com","port":22,"user":"u"}}]},"secrets":[]}"""
+        val contents = java.util.Base64.getEncoder()
+            .encodeToString(cipher.doFinal(inner.toByteArray(Charsets.UTF_8)))
+        return "vault:\n  version: 1\n  contents: $contents\n  keySalt: $saltHex\n  iv: $ivHex\nencrypted: true\n"
+    }
+
+    @Test fun intactHexSaltPullOpensAfterRescue() {
+        // "1234567890123e45" is valid 8-byte hex that YAML reads as Double.
+        val yaml = rawVaultYaml("1234567890123e45", "9af1497337f8d598ceffcb75ee597c6e", "correct-horse", "rescued-host")
+        val r = VaultSync.resolvePull(yaml, "o", "correct-horse")
+        assertTrue("expected Ready, got $r", r is VaultSync.PullResolution.Ready)
+        assertEquals("rescued-host", (r as VaultSync.PullResolution.Ready).profiles[0].name)
+    }
+
+    @Test fun intactHexSaltWrongPassphraseStillSaysSo() {
+        // Rescue composes with normal crypto errors: right envelope, wrong
+        // password must say "Incorrect", not "Invalid vault".
+        val yaml = rawVaultYaml("1234567890123e45", "9af1497337f8d598ceffcb75ee597c6e", "correct-horse", "rescued-host")
+        val r = VaultSync.resolvePull(yaml, "o", "wrong")
+        assertTrue("expected Failed, got $r", r is VaultSync.PullResolution.Failed)
+        assertTrue((r as VaultSync.PullResolution.Failed).message.contains("Incorrect"))
+    }
+
+    @Test fun intactHexSaltPushRoundTrips() {
+        // Push over a rescued vault: decrypt with the rescued salt, then
+        // re-encrypt cleanly (fresh YAML-safe salt, quoted scalars).
+        val yaml = rawVaultYaml("1234567890123e45", "9af1497337f8d598ceffcb75ee597c6e", "correct-horse", "rescued-host")
+        val r = VaultSync.buildUpload(yaml, emptyList(), emptySet(), "correct-horse")
+        assertTrue("expected Ready, got $r", r is VaultSync.PushResolution.Ready)
+        val reopen = VaultSync.resolvePull((r as VaultSync.PushResolution.Ready).content, "o", "correct-horse")
+        assertTrue("expected Ready, got $reopen", reopen is VaultSync.PullResolution.Ready)
+        assertEquals("rescued-host", (reopen as VaultSync.PullResolution.Ready).profiles[0].name)
     }
 
     @Test fun infSaltPullExplainsNumberDamage() {
@@ -221,18 +276,18 @@ class VaultSyncTest {
                 "vault" to mapOf(
                     "version" to 1,
                     "contents" to "dGVzdA==",
-                    "keySalt" to "12e34000000000000",
+                    "keySalt" to "1234567890123e45",
                     "iv" to "9af1497337f8d598ceffcb75ee597c6e",
                 ),
                 "encrypted" to true,
             )
         )
-        assertTrue(out.contains("keySalt: '12e34000000000000'"))
+        assertTrue(out.contains("keySalt: '1234567890123e45'"))
         // …and it loads back as strings, not numbers
         val back = TabbyYamlParser.loadContentMap(out)!!
         @Suppress("UNCHECKED_CAST")
         val vault = back["vault"] as Map<String, Any?>
-        assertEquals("12e34000000000000", vault["keySalt"])
+        assertEquals("1234567890123e45", vault["keySalt"])
         assertEquals("9af1497337f8d598ceffcb75ee597c6e", vault["iv"])
     }
 }

@@ -70,20 +70,32 @@ object VaultCrypto {
         data class Corrupt(val message: String) : VaultEnvelope
     }
 
-    fun examineEnvelope(map: Map<*, *>): VaultEnvelope {
-        val raw = map["vault"] ?: return VaultEnvelope.Missing
+    fun examineEnvelope(map: Map<*, *>): VaultEnvelope = examineEnvelope(map, null)
+
+    /**
+     * Same as above, but with the raw YAML text so number-damaged scalars
+     * can be RESCUED: when `keySalt:`/`iv:`/`contents:` loads as a Number,
+     * the literal text on that line is very often still the intact value
+     * (some writer saved the true hex unquoted and nothing re-saved it as a
+     * float yet). A rescued value must fully validate per field, and the
+     * subsequent decrypt is self-verifying — a wrong rescue simply fails to
+     * decrypt like any wrong key material. Only genuinely destroyed text
+     * (`.inf`, `1.2e+35`) stays Corrupt.
+     */
+    fun examineEnvelope(map: Map<*, *>?, rawYaml: String?): VaultEnvelope {
+        val raw = map?.get("vault") ?: return VaultEnvelope.Missing
         if (raw !is Map<*, *>) {
             return VaultEnvelope.Corrupt(
                 "Invalid vault: the 'vault' section is not a settings block " +
                     "(found ${typeName(raw)}). The server config looks damaged — restore it from a backup."
             )
         }
-        textFieldProblem("contents", raw["contents"])?.let { return VaultEnvelope.Corrupt(it) }
-        textFieldProblem("keySalt", raw["keySalt"])?.let { return VaultEnvelope.Corrupt(it) }
-        textFieldProblem("iv", raw["iv"])?.let { return VaultEnvelope.Corrupt(it) }
-        val contents = raw["contents"] as String
-        val salt = raw["keySalt"] as String
-        val iv = raw["iv"] as String
+        val contents = usableText(raw["contents"], "contents", rawYaml)
+            ?: return VaultEnvelope.Corrupt(fieldProblem("contents", raw["contents"]))
+        val salt = usableText(raw["keySalt"], "keySalt", rawYaml)
+            ?: return VaultEnvelope.Corrupt(fieldProblem("keySalt", raw["keySalt"]))
+        val iv = usableText(raw["iv"], "iv", rawYaml)
+            ?: return VaultEnvelope.Corrupt(fieldProblem("iv", raw["iv"]))
         val version = when (val v = raw["version"]) {
             is Number -> v.toInt()
             is String -> v.trim().toIntOrNull()
@@ -102,22 +114,63 @@ object VaultCrypto {
         )
     }
 
+    /**
+     * The usable text of an envelope field: strings pass through; a Number
+     * is rescued from the raw YAML line when the literal text validates for
+     * that field. Anything else is null (the caller diagnoses why).
+     */
+    private fun usableText(value: Any?, field: String, rawYaml: String?): String? {
+        if (value is String) return value
+        if (value is Number && rawYaml != null) {
+            val rescued = rescueRawScalar(rawYaml, field)
+            if (rescued != null && isPlausibleFieldText(field, rescued)) return rescued
+        }
+        return null
+    }
+
+    /**
+     * The literal scalar text after `field:` on its (last, like SnakeYAML
+     * duplicate handling) YAML line, or null. Comment suffixes are stripped.
+     */
+    fun rescueRawScalar(rawYaml: String, field: String): String? {
+        val re = Regex("""(?m)^\s*${Regex.escape(field)}:\s*(\S+)(?:\s+\#.*)?\s*$""")
+        return re.findAll(rawYaml).lastOrNull()?.groupValues?.getOrNull(1)
+    }
+
+    private fun isHex(s: String): Boolean =
+        s.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+
+    fun isPlausibleBase64(s: String): Boolean {
+        val clean = s.filterNot { it.isWhitespace() }
+        return clean.isNotEmpty() && clean.length % 4 == 0 &&
+            clean.all {
+                it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' ||
+                    it == '+' || it == '/' || it == '='
+            }
+    }
+
+    /** Field-shaped validation for a rescued raw scalar. */
+    private fun isPlausibleFieldText(field: String, s: String): Boolean = when (field) {
+        // Salt feeds PBKDF2 (any even hex length works); desktop uses 8 bytes.
+        "keySalt" -> s.length % 2 == 0 && s.length in 16..128 && isHex(s)
+        // IV must be exactly 16 bytes for AES-256-CBC.
+        "iv" -> s.length == 32 && isHex(s)
+        "contents" -> isPlausibleBase64(s)
+        else -> false
+    }
+
     private fun typeName(v: Any?): String = v?.let { it::class.simpleName } ?: "nothing"
 
     /**
-     * Null when the envelope field is usable text; otherwise a full
-     * user-facing explanation. A salt/iv/contents that YAML loaded as a
-     * NUMBER is the classic unquoted-hex damage (e.g. `12e34…` → `1.2E35`,
-     * or `keySalt: .inf`): the original bytes are unrecoverable from this
-     * file, so the message says so and points at backups.
+     * User-facing explanation for an unusable envelope field. Only called
+     * when [usableText] found nothing usable — rescue included, so a Number
+     * here means the raw line was NOT intact hex/base64 (e.g. `.inf`,
+     * `1.2e+35`): genuinely destroyed, restore-from-backup territory.
      */
-    private fun textFieldProblem(field: String, value: Any?): String? {
+    private fun fieldProblem(field: String, value: Any?): String {
         if (value is String) {
-            if (value.isBlank()) {
-                return "Invalid vault: '$field' is empty — the vault section " +
-                    "is incomplete. Restore the server config from a backup."
-            }
-            return null
+            return "Invalid vault: '$field' is empty — the vault section " +
+                "is incomplete. Restore the server config from a backup."
         }
         if (value == null) {
             return "Invalid vault: '$field' is missing — the vault section " +
@@ -240,18 +293,11 @@ object VaultCrypto {
         // Whitespace-tolerant (some writers wrap/fold long base64 across
         // lines) but otherwise strict: garbage must stay a FORMAT error
         // ("Invalid vault"), never a wrong-passphrase error.
-        val clean = b64.filterNot { it.isWhitespace() }
-        require(
-            clean.isNotEmpty() && clean.length % 4 == 0 &&
-                clean.all {
-                    it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' ||
-                        it == '+' || it == '/' || it == '='
-                }
-        ) {
+        require(isPlausibleBase64(b64)) {
             "Invalid base64"
         }
         return try {
-            java.util.Base64.getMimeDecoder().decode(clean)
+            java.util.Base64.getMimeDecoder().decode(b64.filterNot { it.isWhitespace() })
         } catch (_: IllegalArgumentException) {
             throw IllegalArgumentException("Invalid base64")
         }
