@@ -110,8 +110,19 @@ object VaultCrypto {
     fun encrypt(config: Map<String, Any?>, secrets: List<Any?>, passphrase: String): StoredVault {
         require(passphrase.isNotEmpty()) { "Enter the vault passphrase" }
         val rnd = SecureRandom()
-        val salt = ByteArray(8).also { rnd.nextBytes(it) }
-        val iv = ByteArray(16).also { rnd.nextBytes(it) }
+        // YAML-safe salts: the hex MUST contain one of a,b,c,d,f. A salt of
+        // only [0-9e] (e.g. "6e75…") is dumped unquoted by SnakeYAML and read
+        // back by Tabby desktop (js-yaml) as a float/Infinity, which the next
+        // desktop save then persists as "keySalt: .inf" — permanently
+        // destroying the vault. Retries are cheap (~0.8% rejected).
+        var salt: ByteArray
+        var iv: ByteArray
+        var tries = 0
+        do {
+            salt = ByteArray(8).also { rnd.nextBytes(it) }
+            iv = ByteArray(16).also { rnd.nextBytes(it) }
+            if (++tries > 100) break // paranoia; never happens in practice
+        } while (!isYamlSafeHex(salt) || !isYamlSafeHex(iv))
         val key = derive(passphrase, salt)
         val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
         cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
@@ -138,8 +149,11 @@ object VaultCrypto {
         }
     }
 
-    fun hexToBytes(hex: String): ByteArray {
-        val clean = hex.trim()
+    /** Hex is YAML-safe only with one of a,b,c,d,f ('e'-only still looks numeric). */
+    fun isYamlSafeHex(bytes: ByteArray): Boolean =
+        bytesToHex(bytes).any { it == 'a' || it == 'b' || it == 'c' || it == 'd' || it == 'f' }
+
+    fun hexToBytes(hex: String): ByteArray {        val clean = hex.trim()
         require(clean.length % 2 == 0 && clean.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
             "Invalid hex"
         }

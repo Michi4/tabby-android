@@ -28,7 +28,16 @@ object VaultSync {
         }
         // no cleartext profiles: maybe a fully-encrypted vault
         val stored = VaultCrypto.parseStored(remoteMap)
-            ?: return PullResolution.Ready(emptyList(), emptyList())
+        if (stored == null) {
+            // A vault: block that fails to parse is corruption (e.g. a salt
+            // some YAML writer left unquoted so it loaded as a number) — never
+            // mistake it for "no profiles", or a later upload would overwrite
+            // the vault with cleartext.
+            if (remoteMap["vault"] is Map<*, *>) {
+                return PullResolution.Failed("Invalid vault")
+            }
+            return PullResolution.Ready(emptyList(), emptyList())
+        }
         if (passphrase.isNullOrBlank()) return PullResolution.Locked
         return try {
             val vault = VaultCrypto.decrypt(stored, passphrase)
@@ -64,6 +73,11 @@ object VaultSync {
         val remoteMap = TabbyYamlParser.loadContentMap(remoteContent)
         val stored = remoteMap?.let { VaultCrypto.parseStored(it) }
         if (stored == null) {
+            // Vault block present but unparseable = corruption. Refuse rather
+            // than cleartext-merging over the vault (which would destroy it).
+            if (remoteMap?.get("vault") is Map<*, *>) {
+                return PushResolution.Failed("Invalid vault")
+            }
             return PushResolution.Ready(
                 TabbyYamlSerializer.merge(remoteContent, localProfiles, tombstoneIds)
             )

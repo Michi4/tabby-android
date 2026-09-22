@@ -78,9 +78,26 @@ object TabbyYamlSerializer {
         val opts = DumperOptions().apply {
             defaultFlowStyle = DumperOptions.FlowStyle.BLOCK
             isPrettyFlow = true
+            // Never wrap long scalars: a wrapped base64 vault would fold with
+            // spaces on re-parse and fail to decode. Desktop emits one long line.
+            width = Int.MAX_VALUE
         }
-        return Yaml(opts).dump(map)
+        return quoteVaultScalars(Yaml(opts).dump(map))
     }
+
+    // Matches the scalar on a `keySalt:` / `iv:` / `contents:` line when it is
+    // NOT already quoted and NOT a block-scalar header (>, >-, |, |-).
+    private val vaultScalarLine =
+        Regex("""^(\s*(?:keySalt|iv|contents):\s*)([^'"\s>|][^#\n]*?)\s*$""", RegexOption.MULTILINE)
+
+    /**
+     * Forces single quotes around vault scalars. SnakeYAML omits quotes for
+     * hex like "12e34…", but Tabby desktop (js-yaml) then reads it as a
+     * float/Infinity and its next save persists "keySalt: .inf", killing the
+     * vault. Quoted scalars round-trip as strings in every YAML implementation.
+     */
+    fun quoteVaultScalars(yaml: String): String =
+        vaultScalarLine.replace(yaml) { m -> "${m.groupValues[1]}'${m.groupValues[2]}'" }
 
     /**
      * Deep-merges one profile: starts from the remote desktop entry (keeps

@@ -126,4 +126,15 @@ class VaultCryptoTest {
         val content = VaultCrypto.decrypt(stored, pw)
         assertFalse(content.toString().contains("vector.example.com"))
     }
+
+    @Test fun encryptYieldsYamlSafeSalts() {
+        // Salts of only [0-9e] are dumped unquoted by SnakeYAML and read back
+        // by desktop js-yaml as numbers/Infinity ("keySalt: .inf"). Every
+        // generated salt/iv must contain one of a,b,c,d,f.
+        repeat(50) {
+            val s = VaultCrypto.encrypt(mapOf("version" to 7), emptyList(), "pw-123")
+            assertTrue("unsafe salt ${s.saltHex}", s.saltHex.any { c -> c == 'a' || c == 'b' || c == 'c' || c == 'd' || c == 'f' })
+            assertTrue("unsafe iv ${s.ivHex}", s.ivHex.any { c -> c == 'a' || c == 'b' || c == 'c' || c == 'd' || c == 'f' })
+        }
+    }
 }

@@ -117,4 +117,54 @@ class VaultSyncTest {
         val r = VaultSync.buildUpload("{}", emptyList(), emptySet(), null)
         assertTrue(r is VaultSync.PushResolution.Ready)
     }
+
+    @Test fun numericSaltUploadRefusesInsteadOfCleartextMerge() {
+        // SnakeYAML loads unquoted "12e34…" as Double, so parseStored fails.
+        // Must be Failed (never a cleartext merge over the vault).
+        val yaml = """
+            vault:
+              version: 1
+              contents: dGVzdA==
+              keySalt: 12e34000000000000
+              iv: 9af1497337f8d598ceffcb75ee597c6e
+            encrypted: true
+        """.trimIndent()
+        val r = VaultSync.buildUpload(yaml, emptyList(), emptySet(), "pw")
+        assertTrue("expected Failed, got $r", r is VaultSync.PushResolution.Failed)
+        assertTrue((r as VaultSync.PushResolution.Failed).message.contains("Invalid vault"))
+    }
+
+    @Test fun numericSaltPullFailsInsteadOfEmpty() {
+        val yaml = """
+            vault:
+              version: 1
+              contents: dGVzdA==
+              keySalt: 12e34000000000000
+              iv: 9af1497337f8d598ceffcb75ee597c6e
+            encrypted: true
+        """.trimIndent()
+        val r = VaultSync.resolvePull(yaml, "o", "pw")
+        assertTrue("expected Failed, got $r", r is VaultSync.PullResolution.Failed)
+    }
+
+    @Test fun dumpQuotesNumericVaultScalars() {
+        val out = TabbyYamlSerializer.dumpYaml(
+            mapOf(
+                "vault" to mapOf(
+                    "version" to 1,
+                    "contents" to "dGVzdA==",
+                    "keySalt" to "12e34000000000000",
+                    "iv" to "9af1497337f8d598ceffcb75ee597c6e",
+                ),
+                "encrypted" to true,
+            )
+        )
+        assertTrue(out.contains("keySalt: '12e34000000000000'"))
+        // …and it loads back as strings, not numbers
+        val back = TabbyYamlParser.loadContentMap(out)!!
+        @Suppress("UNCHECKED_CAST")
+        val vault = back["vault"] as Map<String, Any?>
+        assertEquals("12e34000000000000", vault["keySalt"])
+        assertEquals("9af1497337f8d598ceffcb75ee597c6e", vault["iv"])
+    }
 }
