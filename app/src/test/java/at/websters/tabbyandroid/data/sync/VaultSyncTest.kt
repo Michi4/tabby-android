@@ -145,6 +145,74 @@ class VaultSyncTest {
         """.trimIndent()
         val r = VaultSync.resolvePull(yaml, "o", "pw")
         assertTrue("expected Failed, got $r", r is VaultSync.PullResolution.Failed)
+        // …and the message must name the damaged field and point at backups
+        val msg = (r as VaultSync.PullResolution.Failed).message
+        assertTrue(msg, msg.contains("keySalt") && msg.contains("number") && msg.contains("backup"))
+    }
+
+    @Test fun infSaltPullExplainsNumberDamage() {
+        val yaml = """
+            vault:
+              version: 1
+              contents: dGVzdA==
+              keySalt: .inf
+              iv: 9af1497337f8d598ceffcb75ee597c6e
+            encrypted: true
+        """.trimIndent()
+        val r = VaultSync.resolvePull(yaml, "o", "pw")
+        assertTrue("expected Failed, got $r", r is VaultSync.PullResolution.Failed)
+        val msg = (r as VaultSync.PullResolution.Failed).message
+        assertTrue(msg, msg.contains("keySalt") && msg.contains("number"))
+    }
+
+    @Test fun missingIvUploadNamesField() {
+        val yaml = """
+            vault:
+              version: 1
+              contents: dGVzdA==
+              keySalt: 9af1497337f8d59
+            encrypted: true
+        """.trimIndent()
+        val r = VaultSync.buildUpload(yaml, emptyList(), emptySet(), "pw")
+        assertTrue("expected Failed, got $r", r is VaultSync.PushResolution.Failed)
+        assertTrue((r as VaultSync.PushResolution.Failed).message.contains("iv"))
+    }
+
+    @Test fun stringVersionPullOpens() {
+        // A writer that quoted `version: "1"` writes a valid vault.
+        val (yaml, pw, _) = vaultYaml()
+        val quoted = yaml.replace("version: 1", "version: \"1\"")
+        val r = VaultSync.resolvePull(quoted, "o", pw)
+        assertTrue("expected Ready, got $r", r is VaultSync.PullResolution.Ready)
+        assertEquals("vector-host", (r as VaultSync.PullResolution.Ready).profiles[0].name)
+    }
+
+    @Test fun wrappedContentsPullOpens() {
+        // Base64 folded across lines (plain multiline scalar loads with
+        // spaces) is formatting, not damage: the vault must still open.
+        val (yaml, pw, _) = vaultYaml()
+        val lines = yaml.lines().toMutableList()
+        val idx = lines.indexOfFirst { it.trimStart().startsWith("contents:") }
+        val b64 = lines[idx].substringAfter("contents:").trim()
+        lines[idx] = "  contents: " + b64.chunked(64).joinToString("\n    ")
+        val r = VaultSync.resolvePull(lines.joinToString("\n"), "o", pw)
+        assertTrue("expected Ready, got $r", r is VaultSync.PullResolution.Ready)
+        assertEquals("vector-host", (r as VaultSync.PullResolution.Ready).profiles[0].name)
+    }
+
+    @Test fun wrappedContentsUploadRoundTrips() {
+        // Push over a wrapped-contents vault: decrypt must tolerate the
+        // folding, then re-encrypt cleanly.
+        val (yaml, pw, _) = vaultYaml()
+        val lines = yaml.lines().toMutableList()
+        val idx = lines.indexOfFirst { it.trimStart().startsWith("contents:") }
+        val b64 = lines[idx].substringAfter("contents:").trim()
+        lines[idx] = "  contents: " + b64.chunked(64).joinToString("\n    ")
+        val r = VaultSync.buildUpload(lines.joinToString("\n"), emptyList(), emptySet(), pw)
+        assertTrue("expected Ready, got $r", r is VaultSync.PushResolution.Ready)
+        // …and the rebuilt upload opens again with the same passphrase
+        val reopen = VaultSync.resolvePull((r as VaultSync.PushResolution.Ready).content, "o", pw)
+        assertTrue("expected Ready, got $reopen", reopen is VaultSync.PullResolution.Ready)
     }
 
     @Test fun dumpQuotesNumericVaultScalars() {

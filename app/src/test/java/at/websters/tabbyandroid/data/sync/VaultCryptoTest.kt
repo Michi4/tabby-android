@@ -137,4 +137,92 @@ class VaultCryptoTest {
             assertTrue("unsafe iv ${s.ivHex}", s.ivHex.any { c -> c == 'a' || c == 'b' || c == 'c' || c == 'd' || c == 'f' })
         }
     }
+
+    @Test fun hexIgnoresInternalWhitespace() {
+        val (stored, _) = vector()
+        val spaced = stored.saltHex.chunked(4).joinToString(" ") + "\n"
+        assertArrayEquals(
+            VaultCrypto.hexToBytes(stored.saltHex),
+            VaultCrypto.hexToBytes(spaced),
+        )
+    }
+
+    @Test fun base64IgnoresWrappedLines() {
+        val (stored, pw) = vector()
+        val wrapped = stored.contentsB64.chunked(64).joinToString("\n")
+        val reWrapped = stored.copy(contentsB64 = wrapped)
+        // Must open exactly like the original: wrapped base64 is formatting,
+        // never damage.
+        val content = VaultCrypto.decrypt(reWrapped, pw)
+        val profiles = TabbyYamlParser.parseSshProfilesFromMap(content.config, "o")
+        assertEquals(1, profiles.size)
+        assertEquals("vector-host", profiles[0].name)
+    }
+
+    @Test fun base64GarbageStaysFormatError() {
+        // Garbage must throw VaultFormatException (format error), NOT surface
+        // as a wrong-passphrase error.
+        val (stored, pw) = vector()
+        try {
+            VaultCrypto.decrypt(stored.copy(contentsB64 = "!!!not-base64!!!"), pw)
+            fail("must throw")
+        } catch (e: VaultFormatException) {
+            assertTrue(e.message!!.contains("Invalid vault"))
+        }
+    }
+
+    @Test fun stringVersionAccepted() {
+        val env = VaultCrypto.examineEnvelope(
+            mapOf("vault" to mapOf("version" to "1", "contents" to "dGVzdA==", "keySalt" to "ab", "iv" to "cd"))
+        )
+        assertTrue("expected Valid, got $env", env is VaultCrypto.VaultEnvelope.Valid)
+        assertEquals(1, (env as VaultCrypto.VaultEnvelope.Valid).stored.version)
+    }
+
+    @Test fun numericSaltDiagnosed() {
+        // Unquoted "12e34…" hex loads as Double: the original bytes are gone,
+        // so the message must name the field, say "number", and point at backups.
+        val env = VaultCrypto.examineEnvelope(
+            mapOf("vault" to mapOf("version" to 1, "contents" to "dGVzdA==", "keySalt" to 1.2E35, "iv" to "cd"))
+        )
+        assertTrue("expected Corrupt, got $env", env is VaultCrypto.VaultEnvelope.Corrupt)
+        val msg = (env as VaultCrypto.VaultEnvelope.Corrupt).message
+        assertTrue(msg, msg.contains("Invalid vault"))
+        assertTrue(msg, msg.contains("keySalt"))
+        assertTrue(msg, msg.contains("number"))
+        assertTrue(msg, msg.contains("backup"))
+    }
+
+    @Test fun infiniteSaltDiagnosed() {
+        // `keySalt: .inf` (the desktop re-save of a number-damaged salt).
+        val env = VaultCrypto.examineEnvelope(
+            mapOf("vault" to mapOf("version" to 1, "contents" to "dGVzdA==", "keySalt" to Double.POSITIVE_INFINITY, "iv" to "cd"))
+        )
+        assertTrue("expected Corrupt, got $env", env is VaultCrypto.VaultEnvelope.Corrupt)
+        val msg = (env as VaultCrypto.VaultEnvelope.Corrupt).message
+        assertTrue(msg, msg.contains("keySalt") && msg.contains("number"))
+    }
+
+    @Test fun missingContentsNamed() {
+        val env = VaultCrypto.examineEnvelope(
+            mapOf("vault" to mapOf("version" to 1, "keySalt" to "ab", "iv" to "cd"))
+        )
+        assertTrue("expected Corrupt, got $env", env is VaultCrypto.VaultEnvelope.Corrupt)
+        assertTrue((env as VaultCrypto.VaultEnvelope.Corrupt).message.contains("contents"))
+    }
+
+    @Test fun nonMapVaultBlockDiagnosed() {
+        val env = VaultCrypto.examineEnvelope(mapOf("vault" to "oops"))
+        assertTrue("expected Corrupt, got $env", env is VaultCrypto.VaultEnvelope.Corrupt)
+        assertTrue((env as VaultCrypto.VaultEnvelope.Corrupt).message.contains("vault"))
+    }
+
+    @Test fun emptyVaultBlockDiagnosed() {
+        val env = VaultCrypto.examineEnvelope(mapOf("vault" to emptyMap<String, Any?>()))
+        assertTrue("expected Corrupt, got $env", env is VaultCrypto.VaultEnvelope.Corrupt)
+    }
+
+    @Test fun absentVaultBlockIsMissing() {
+        assertTrue(VaultCrypto.examineEnvelope(emptyMap<String, Any?>()) is VaultCrypto.VaultEnvelope.Missing)
+    }
 }

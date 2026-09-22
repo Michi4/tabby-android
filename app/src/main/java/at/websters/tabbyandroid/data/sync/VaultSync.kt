@@ -27,18 +27,21 @@ object VaultSync {
             return PullResolution.Ready(parsed, groups)
         }
         // no cleartext profiles: maybe a fully-encrypted vault
-        val stored = VaultCrypto.parseStored(remoteMap)
-        if (stored == null) {
-            // A vault: block that fails to parse is corruption (e.g. a salt
-            // some YAML writer left unquoted so it loaded as a number) — never
-            // mistake it for "no profiles", or a later upload would overwrite
-            // the vault with cleartext.
-            if (remoteMap["vault"] is Map<*, *>) {
-                return PullResolution.Failed("Invalid vault")
+        return when (val env = VaultCrypto.examineEnvelope(remoteMap)) {
+            is VaultCrypto.VaultEnvelope.Missing -> PullResolution.Ready(emptyList(), emptyList())
+            is VaultCrypto.VaultEnvelope.Corrupt -> PullResolution.Failed(env.message)
+            is VaultCrypto.VaultEnvelope.Valid -> {
+                if (passphrase.isNullOrBlank()) return PullResolution.Locked
+                pullStored(env.stored, origin, passphrase)
             }
-            return PullResolution.Ready(emptyList(), emptyList())
         }
-        if (passphrase.isNullOrBlank()) return PullResolution.Locked
+    }
+
+    private fun pullStored(
+        stored: VaultCrypto.StoredVault,
+        origin: String,
+        passphrase: String,
+    ): PullResolution {
         return try {
             val vault = VaultCrypto.decrypt(stored, passphrase)
             PullResolution.Ready(
@@ -71,17 +74,26 @@ object VaultSync {
             return PushResolution.Failed("Server config is unreadable YAML")
         }
         val remoteMap = TabbyYamlParser.loadContentMap(remoteContent)
-        val stored = remoteMap?.let { VaultCrypto.parseStored(it) }
-        if (stored == null) {
-            // Vault block present but unparseable = corruption. Refuse rather
-            // than cleartext-merging over the vault (which would destroy it).
-            if (remoteMap?.get("vault") is Map<*, *>) {
-                return PushResolution.Failed("Invalid vault")
-            }
-            return PushResolution.Ready(
+        return when (val env = remoteMap?.let { VaultCrypto.examineEnvelope(it) }) {
+            null, is VaultCrypto.VaultEnvelope.Missing -> PushResolution.Ready(
                 TabbyYamlSerializer.merge(remoteContent, localProfiles, tombstoneIds)
             )
+            // Vault block present but unusable = never cleartext-merge over
+            // it (that would destroy the vault); report WHY it is unusable.
+            is VaultCrypto.VaultEnvelope.Corrupt -> PushResolution.Failed(env.message)
+            is VaultCrypto.VaultEnvelope.Valid ->
+                // Valid implies remoteMap was non-null.
+                pushStored(requireNotNull(remoteMap), env.stored, localProfiles, tombstoneIds, passphrase)
         }
+    }
+
+    private fun pushStored(
+        remoteMap: MutableMap<String, Any?>,
+        stored: VaultCrypto.StoredVault,
+        localProfiles: List<SshProfile>,
+        tombstoneIds: Set<String>,
+        passphrase: String?,
+    ): PushResolution {
         if (passphrase.isNullOrBlank()) return PushResolution.Locked
         return try {
             val vault = VaultCrypto.decrypt(stored, passphrase)

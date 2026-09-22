@@ -52,18 +52,86 @@ object VaultCrypto {
     }
 
     /** Extracts the stored vault from a remote config map (`{vault: {...}, ...}`). */
-    fun parseStored(map: Map<*, *>): StoredVault? {
-        val v = map["vault"] as? Map<*, *> ?: return null
-        val contents = v["contents"] as? String ?: return null
-        val salt = v["keySalt"] as? String ?: return null
-        val iv = v["iv"] as? String ?: return null
-        if (contents.isBlank() || salt.isBlank() || iv.isBlank()) return null
-        return StoredVault(
-            version = (v["version"] as? Number)?.toInt() ?: return null,
-            contentsB64 = contents,
-            saltHex = salt,
-            ivHex = iv,
+    fun parseStored(map: Map<*, *>): StoredVault? =
+        when (val env = examineEnvelope(map)) {
+            is VaultEnvelope.Valid -> env.stored
+            else -> null
+        }
+
+    /**
+     * Inspects the `vault:` block and explains WHY it is unusable, so the UI
+     * can show an actionable message instead of a bare "Invalid vault".
+     * Only field names and detected *types* ever enter messages — never
+     * values (ciphertext/salts stay out of logs and screens).
+     */
+    sealed interface VaultEnvelope {
+        data object Missing : VaultEnvelope
+        data class Valid(val stored: StoredVault) : VaultEnvelope
+        data class Corrupt(val message: String) : VaultEnvelope
+    }
+
+    fun examineEnvelope(map: Map<*, *>): VaultEnvelope {
+        val raw = map["vault"] ?: return VaultEnvelope.Missing
+        if (raw !is Map<*, *>) {
+            return VaultEnvelope.Corrupt(
+                "Invalid vault: the 'vault' section is not a settings block " +
+                    "(found ${typeName(raw)}). The server config looks damaged — restore it from a backup."
+            )
+        }
+        textFieldProblem("contents", raw["contents"])?.let { return VaultEnvelope.Corrupt(it) }
+        textFieldProblem("keySalt", raw["keySalt"])?.let { return VaultEnvelope.Corrupt(it) }
+        textFieldProblem("iv", raw["iv"])?.let { return VaultEnvelope.Corrupt(it) }
+        val contents = raw["contents"] as String
+        val salt = raw["keySalt"] as String
+        val iv = raw["iv"] as String
+        val version = when (val v = raw["version"]) {
+            is Number -> v.toInt()
+            is String -> v.trim().toIntOrNull()
+            else -> null
+        } ?: return VaultEnvelope.Corrupt(
+            "Invalid vault: 'version' is missing or not a number " +
+                "(found ${typeName(raw["version"])}). The vault section is incomplete — restore it from a backup."
         )
+        return VaultEnvelope.Valid(
+            StoredVault(
+                version = version,
+                contentsB64 = contents,
+                saltHex = salt,
+                ivHex = iv,
+            )
+        )
+    }
+
+    private fun typeName(v: Any?): String = v?.let { it::class.simpleName } ?: "nothing"
+
+    /**
+     * Null when the envelope field is usable text; otherwise a full
+     * user-facing explanation. A salt/iv/contents that YAML loaded as a
+     * NUMBER is the classic unquoted-hex damage (e.g. `12e34…` → `1.2E35`,
+     * or `keySalt: .inf`): the original bytes are unrecoverable from this
+     * file, so the message says so and points at backups.
+     */
+    private fun textFieldProblem(field: String, value: Any?): String? {
+        if (value is String) {
+            if (value.isBlank()) {
+                return "Invalid vault: '$field' is empty — the vault section " +
+                    "is incomplete. Restore the server config from a backup."
+            }
+            return null
+        }
+        if (value == null) {
+            return "Invalid vault: '$field' is missing — the vault section " +
+                "is incomplete. Restore the server config from a backup."
+        }
+        if (value is Number) {
+            return "Invalid vault: '$field' was saved as a number instead of " +
+                "text — a YAML number conversion damaged the config and the " +
+                "original value cannot be recomputed. Restore config.yaml " +
+                "from a backup (desktop or a previous upload), then pull again."
+        }
+        return "Invalid vault: '$field' has an unexpected type " +
+            "(${typeName(value)}) — the vault section is damaged. " +
+            "Restore the server config from a backup."
     }
 
     fun decrypt(vault: StoredVault, passphrase: String): VaultContent {
@@ -153,7 +221,10 @@ object VaultCrypto {
     fun isYamlSafeHex(bytes: ByteArray): Boolean =
         bytesToHex(bytes).any { it == 'a' || it == 'b' || it == 'c' || it == 'd' || it == 'f' }
 
-    fun hexToBytes(hex: String): ByteArray {        val clean = hex.trim()
+    fun hexToBytes(hex: String): ByteArray {
+        // Strip ALL whitespace, not just the ends: some writers wrap long
+        // hex across lines, and wrapped-but-valid hex must still open.
+        val clean = hex.filterNot { it.isWhitespace() }
         require(clean.length % 2 == 0 && clean.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
             "Invalid hex"
         }
@@ -165,7 +236,26 @@ object VaultCrypto {
     fun bytesToHex(bytes: ByteArray): String =
         bytes.joinToString("") { "%02x".format(it) }
 
-    fun base64ToBytes(b64: String): ByteArray = java.util.Base64.getDecoder().decode(b64.trim())
+    fun base64ToBytes(b64: String): ByteArray {
+        // Whitespace-tolerant (some writers wrap/fold long base64 across
+        // lines) but otherwise strict: garbage must stay a FORMAT error
+        // ("Invalid vault"), never a wrong-passphrase error.
+        val clean = b64.filterNot { it.isWhitespace() }
+        require(
+            clean.isNotEmpty() && clean.length % 4 == 0 &&
+                clean.all {
+                    it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' ||
+                        it == '+' || it == '/' || it == '='
+                }
+        ) {
+            "Invalid base64"
+        }
+        return try {
+            java.util.Base64.getMimeDecoder().decode(clean)
+        } catch (_: IllegalArgumentException) {
+            throw IllegalArgumentException("Invalid base64")
+        }
+    }
 
     fun bytesToBase64(bytes: ByteArray): String = java.util.Base64.getEncoder().encodeToString(bytes)
 }
