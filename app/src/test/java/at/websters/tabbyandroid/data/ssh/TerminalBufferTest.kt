@@ -429,8 +429,7 @@ class TerminalBufferTest {
         assertEquals(before, b.visibleText())
     }
 
-    @Test fun bareDeleteLineStillWorks() {
-        // No mouse tracking: `ESC[M` is DL as before (regression guard for
+    @Test fun bareDeleteLineStillWorks() {        // No mouse tracking: `ESC[M` is DL as before (regression guard for
         // the X10 special case), and DECSET still applies (gate guard).
         val b = TerminalBuffer(cols = 20, rows = 6)
         b.feed("aaa\r\nbbb\r\nccc".toByteArray())
@@ -444,5 +443,34 @@ class TerminalBufferTest {
         assertTrue(!c.snapshot().cursorVisible)
         c.feed("\u001B[?25h".toByteArray())
         assertTrue(c.snapshot().cursorVisible)
+    }
+
+    @Test(timeout = 30_000) fun binaryGarbageNeverCrashes() {
+        // Fixed-seed fuzz over the full byte range incl. split feeds:
+        // hostile/malformed server output must degrade, never throw or hang.
+        val rnd = java.util.Random(0x5EED1234)
+        val b = TerminalBuffer(cols = 51, rows = 24)
+        val chunk = ByteArray(4096)
+        repeat(40) {
+            rnd.nextBytes(chunk)
+            // Feed in odd splits to exercise the carry path on every shape.
+            var off = 0
+            while (off < chunk.size) {
+                val n = 1 + rnd.nextInt(700)
+                b.feed(chunk, off, minOf(n, chunk.size - off))
+                off += n
+            }
+            // Every snapshot operation must stay consistent.
+            val s = b.snapshot()
+            assertTrue(s.cursorRow in 0 until 24)
+            assertTrue(s.cursorCol in 0 until 51)
+            b.visibleText()
+            b.lastLines(50)
+            b.searchLines("x")
+            b.historyWindow(100)
+        }
+        b.resize(30, 12)
+        b.reset()
+        assertEquals(12, b.snapshot().lines.size)
     }
 }
