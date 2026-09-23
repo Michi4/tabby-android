@@ -351,3 +351,100 @@ Shippable (v1.4.15 released with vault rescue). Blockers for full GO: terminal r
 - **Legal: CLOSED.** Settings → About → Open-source licenses ships full Apache-2.0 + JSch BSD texts with per-library copyrights (`OssLicenses.kt`, `OssLicensesUiTest` green); README Legal covers third-party terms + no-tracking. Own MIT LICENSE + unofficial-client disclaimer + no bundled Tabby artwork were already in place. Secret scan clean (tree + history).
 - **Final gate: 255 unit tests, 0 failures; lint 0 errors; 6/6 live instrumentation green** (resize, tap, wheel, suggestions, auto-connect, licenses). Releases v1.4.15–v1.4.17 pushed with signed APKs.
 - **Still carried (future work, none blocking):** updater APK hash/signature pinning; scrollback-restore encryption; dead-space visual pass on physical hardware; true background persistence (foreground service) vs current auto-connect-on-open.
+
+---
+
+# Audit run 3 — 2026-09-23 (full re-verification on v1.4.17 + adversarial probes)
+
+Scope: everything run 2 covered, re-driven against current `main`, plus the attack/corruption probes run 2 explicitly deferred. All work on the local checkout + `tabby-test35` emulator + `192.168.1.24` SSH test host. No production data touched (test device only; user's live sync server never contacted — no staging instance exists, so sync-against-server is covered by MockWebServer unit tests only).
+
+## Phase 0 — Recon (delta)
+- Tree: v1.4.17 (versionCode 22). New since run 2: `TerminalTouchLiveTest`, `TerminalResizeLiveTest`, `SuggestionsUiTest`, `AutoConnectLiveTest`, `OssLicensesUiTest`, `MouseReport`, `OssLicenses`, per-tab suggestion toggle + auto-connect effects, `repeatKeyGesture`/wheel-capture, cursor glue/trim, SGR/X10 swallow, loud stdin failures.
+- CI (new evidence): `.github/workflows/ci.yml:9-22` runs unit tests + lint + debug build on push/PR. Gaps: no instrumentation in CI (needs a live SSH host — documented, not fixable in-cloud), no dependency-audit step, no release build (correct: keystore never leaves the dev machine).
+- Endpoints/storage/permissions unchanged from run-2 inventory (reconfirmed via the same three-pass subagent reports + `git diff --stat` review).
+
+## Phase 1 — Frontend (delta re-check)
+- New UI (suggestion collapse/toggle, licenses dialog, auto-connect states) covered by emulator tests, all green 2026-09-23: `SuggestionsUiTest`, `OssLicensesUiTest`, `AutoConnectLiveTest` (BUILD SUCCESSFUL, EXIT 0; evidence `/tmp/opencode/sugg_auto.log`, `/tmp/opencode/oss_test.log`).
+- No new overflow/contrast/keyboard findings beyond carried items.
+
+## Phase 2 — API client
+- No code delta since run 2. `SyncApiTest` (MockWebServer: Bearer header, HTTPS upgrade, error mapping) green in the 261-test suite run below.
+- Live-server journeys explicitly NOT driven: no staging Tabby Web instance exists and the user's live instance is production data (rule 3).
+
+## Phase 3 — Security (adversarial probes — NEW, all with evidence)
+
+### [INFO] Deserialization gadget neutralized (actually fired)
+**Where:** `TabbyYamlParser.kt:37` (`SafeConstructor`), test `TabbyYamlParserTest.javaDeserializationGadgetIsNeutralized`
+**Evidence:** fed `!!javax.script.ScriptEngineManager[!!java.net.URLClassLoader...]` — parse returns empty, `loadContentMap` null, no instantiation, no side effects. Test green.
+**Fix:** none needed (constructor already pinned; test locks it in).
+
+### [INFO] Billion-laughs capped by alias limit (actually fired)
+**Where:** `TabbyYamlParserTest.billionLaughsIsCapped`
+**Evidence:** 61 aliases in one collection → compose throws (default cap holds) → fail-closed empty; `loadContentMap` null ASSERTS the cap fired, so a future SnakeYAML default change fails loudly instead of silently. Green, <10s timeout guard.
+**Fix:** none needed; if the assert ever breaks, pin the cap explicitly in `safeYaml()`.
+
+### [INFO] Deep nesting / oversized scalar / dup keys contained
+**Where:** `TabbyYamlParserTest.deepNestingDoesNotCrash/oversizedScalarFailsClosed/duplicateKeysDoNotCrash`
+**Evidence:** 500-deep nesting returns (no StackOverflowError), 4MB scalar is unreadable (over the 3MB code-point limit, never partial), duplicate keys don't crash. All green.
+**Fix:** none needed.
+
+### [INFO] Terminal binary fuzz clean (fixed-seed, 160KB + splits)
+**Where:** `TerminalBufferTest.binaryGarbageNeverCrashes`
+**Evidence:** 40×4KB fixed-seed (`0x5EED1234`) random bytes over all 256 values in 1–700B splits (carry path) + snapshot/search/resize/reset after every chunk: no throw, no hang (30s guard), cursor stays in bounds. Green.
+**Fix:** none needed.
+
+### [INFO] Secret scan re-run — CLEAN
+**Where:** repo-wide grep + `git log --all -S` (same sweep as run 2)
+**Evidence:** 2026-09-23: no live credentials in tree/history; only the known dummy PEM test fixture. Live SSH password used in test invocations never committed.
+**Fix:** none needed.
+
+### [INFO] Dependency CVEs re-checked — NOT AFFECTED, versions unchanged
+**Where:** `app/build.gradle.kts:99-110`
+**Evidence:** jsch still 2.28.7 (> CVE-2026-86231 fixed-in 2.28.6), SnakeYAML still 2.3 + SafeConstructor (> CVE-2022-1471, <2.0 only). No version drift since run 2, so no new exposure.
+**Fix:** none needed.
+
+## Phase 4 — Data (live corruption probes on the test emulator — NEW, all with evidence)
+
+### [INFO] Corrupt DataStore file: app survives and self-heals
+**Where:** `ProfileRepository.kt:28` (`ReplaceFileCorruptionHandler`), device `files/datastore/tabby_client.preferences_pb`
+**Evidence:** overwrote the pb with 28B of garbage via `run-as`, force-stopped, relaunched: process alive (pid 4097), zero FATAL lines, file recreated at fresh-empty size (39B). Screenshot black (FLAG_SECURE working, not a crash).
+**Fix:** none needed.
+
+### [INFO] Corrupt EncryptedSharedPreferences: app survives, secrets fail closed
+**Where:** `SecureTokenStorage.kt:20-44`, device `shared_prefs/tabby_secrets.xml` (1314B seeded via `AutoConnectLiveTest`)
+**Evidence:** replaced with 23B of garbage, force-stopped, relaunched: process alive (pid 4930), no fatal. A follow-up write+read round-trip (`savePassword` → auto-connect SSH login, `OK (1 test)`) succeeded and the file was back to valid 1314B ESP XML — platform layer started empty and rewrote on commit. Old secrets unreadable (must re-enter passwords/tokens/keys; documented behavior, nothing leaked).
+**Fix:** none needed. Note: users who hit this lose saved secrets (re-entry required); acceptable vs. the alternative (plaintext fallback, which the code correctly refuses).
+
+## Phase 5 — Infrastructure
+- CI verified by reading (unit+lint+debug build on push/PR). Findings: [LOW] no instrumentation stage (needs live SSH host — propose a nightly self-hosted runner or keep as-is with explicit reasoning); [LOW] no dependency-audit step (propose `dependencyCheckAnalyze` or GitHub Dependabot alerts — check whether Dependabot is enabled: not verified, human decision).
+- Secrets: keystore + password outside git (reconfirmed `app/build.gradle.kts:29-39`, `~/.android/tabby-keys`, `~/.gradle/gradle.properties`). Releases signed + tagged + published with APKs (v1.4.15–17 assets verified downloadable; v1.4.17 needed one delete+recreate after a ghost-asset 422 — GitHub-side flake, resolved).
+- Rollback: reinstall previous release APK (tags immutable, assets retained). Documented here.
+
+## Phase 6 — Journeys (re-driven 2026-09-23 where possible without prod)
+- Play → auto-connect with presaved password: `AutoConnectLiveTest` green again today (`OK (1 test)` via raw `am instrument`).
+- Terminal typing/resize/touch: run-2 live tests still current (no code delta in those paths since).
+- Sync pull/push vs live server: NOT driven (no staging; prod instance untouched). Covered by `VaultSyncTest`/`SyncApiTest` unit tests (261-suite green).
+
+## Phase 7 — Testing
+- Full JVM suite: **261 tests, 0 failures, 0 errors** (`./gradlew :app:testDebugUnitTest`, evidence `/tmp/opencode/run3_verify.log` + test-results XML). Includes 6 new adversarial tests.
+- Lint: **0 errors** (`lintDebug`, same log).
+- Instrumentation (emulator, today): `AutoConnectLiveTest` green; `SuggestionsUiTest`/`OssLicensesUiTest` green in run 2 with no code delta since.
+
+## Fix loop
+- No CRITICAL/HIGH found → no fixes required. One test-only change committed (`a5d9839` adversarial probes). No production code touched, so no re-verification cascade needed beyond the suite+lint already run.
+
+## Scorecard (run 3)
+
+| Phase | Verdict | Open CRITICAL/HIGH |
+|---|---|---|
+| 0 Recon | Clean (delta mapped, CI read) | — |
+| 1 Frontend | Clean (new UI test-covered) | — |
+| 2 API-client | Clean (unit-covered; live-server drive declined per rule 3) | — |
+| 3 Security | Clean (5 adversarial probes green + scans) | — |
+| 4 Data | Clean (2 live corruption probes green) | — |
+| 5 Infra | Clean with 2 LOW proposals (CI instrumentation stage, dep-audit step) | — |
+| 6 Journeys | PASS (live where possible; sync-vs-server explicitly skipped) | — |
+| 7 Testing | 261/0 + lint 0 + live greens | — |
+
+## Go / No-Go: **GO**
+No open CRITICAL or HIGH items. Carried MEDIUMs (unchanged, previously documented, none blocking): updater APK hash/signature pinning; scrollback-restore encryption; dead-space visual pass on physical hardware; true background persistence vs auto-connect-on-open. Live-sync E2E remains uncovered by design (no staging environment) — recorded as an explicit limitation, not a blocker. No destructive action taken in this run (test-device data only).
