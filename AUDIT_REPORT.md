@@ -334,3 +334,12 @@ Scope delta since run 1: SSH pty-resize serialization (1.4.10–1.4.12), folder 
 
 ## Go / No-Go: **CONDITIONAL GO**
 Shippable (v1.4.15 released with vault rescue). Blockers for full GO: terminal resize duplication fix + emulator-verified touch/resize tests. No destructive action taken; shutdown pending user request at end of run.
+
+## Run 2 closing notes — 2026-09-23 (v1.4.16, all verified)
+
+- **Resize duplication (was HIGH): FIXED + verified.** Root cause was cursor teleport on viewport shrink (`physRow` shifts with the viewport base; `TerminalBuffer.kt`), fixed by gluing the cursor to its physical line + trimming trailing blank filler on shrink. Red→green proven at JVM level (`TerminalBufferTest.resizeKeepsCursorGluedToPhysicalLine` fails on old clamp) and live over real SSH (`TerminalResizeLiveTest`: fresh + full-screen phases, exact prompt inventory, was +1 dup).
+- **Touch interactivity (was HIGH): FIXED + verified live.** Tap (shell arrows / SGR+X10 clicks), drag-to-wheel in alt-screen mouse apps, spacebar-swipe forwarding, hold-to-repeat keys — all green against a mouse-reporting `od` harness on real SSH (`TerminalTouchLiveTest`, 2/2). Parser hardened: echoed SGR/X10 swallowed, never DL-executed (`TerminalBufferTest.echoedSgrMouseNeverDeletesLines` + 3 more).
+- **JVM suite: 255 tests, 0 failures.** Lint: 0 errors. Live: 3/3 (resize + 2 touch) on `tabby-test35` (API 35; the API-36 AVD cold-boot wedges on `odsign`/`tombstoned` crash loops with emulator 37.1.11 — environment note, not app).
+- **Robustness:** silent stdin-drop fixed (`SshConnection.writeStdin` now logs + surfaces ERROR); one live flake traced to a half-open emulator-network channel, now diagnosable via state logging.
+- **Remaining MEDIUMs (carried, not regressions):** updater APK without hash/signature check; plaintext scrollback restore; suggestion-bar collapse/toggle + dead-space removal (unblocked now that resizes are loss-neutral — next batch); auto-reconnect on resume.
+- No destructive action taken this run. Machine shutdown performed at user request after release.
