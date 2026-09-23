@@ -343,3 +343,11 @@ Shippable (v1.4.15 released with vault rescue). Blockers for full GO: terminal r
 - **Robustness:** silent stdin-drop fixed (`SshConnection.writeStdin` now logs + surfaces ERROR); one live flake traced to a half-open emulator-network channel, now diagnosable via state logging.
 - **Remaining MEDIUMs (carried, not regressions):** updater APK without hash/signature check; plaintext scrollback restore; suggestion-bar collapse/toggle + dead-space removal (unblocked now that resizes are loss-neutral — next batch); auto-reconnect on resume.
 - No destructive action taken this run. Machine shutdown performed at user request after release.
+
+## Run 2 addendum — v1.4.17 (verified, released)
+
+- **Suggestion bar (was MEDIUM): FIXED + verified.** Collapses to zero height when empty (36dp dead strip removed), per-tab toolbar toggle (★), Settings stays global default. `SuggestionsUiTest` green (collapse/appear/toggle-off/toggle-on/clear).
+- **Play auto-connect (was MEDIUM): FIXED + verified live.** Credentialed tabs auto-connect once on open; credential-less/failed tabs stay manual. `AutoConnectLiveTest` green (zero taps, no auth UI).
+- **Legal: CLOSED.** Settings → About → Open-source licenses ships full Apache-2.0 + JSch BSD texts with per-library copyrights (`OssLicenses.kt`, `OssLicensesUiTest` green); README Legal covers third-party terms + no-tracking. Own MIT LICENSE + unofficial-client disclaimer + no bundled Tabby artwork were already in place. Secret scan clean (tree + history).
+- **Final gate: 255 unit tests, 0 failures; lint 0 errors; 6/6 live instrumentation green** (resize, tap, wheel, suggestions, auto-connect, licenses). Releases v1.4.15–v1.4.17 pushed with signed APKs.
+- **Still carried (future work, none blocking):** updater APK hash/signature pinning; scrollback-restore encryption; dead-space visual pass on physical hardware; true background persistence (foreground service) vs current auto-connect-on-open.
