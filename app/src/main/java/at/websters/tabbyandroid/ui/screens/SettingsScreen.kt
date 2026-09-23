@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -57,6 +58,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import at.websters.tabbyandroid.BuildConfig
 import at.websters.tabbyandroid.data.local.KeyLayout
+import at.websters.tabbyandroid.data.local.OSS_LIBRARIES
+import at.websters.tabbyandroid.data.local.APACHE_2_0_TEXT
+import at.websters.tabbyandroid.data.local.JSCH_BSD_TEXT
 import at.websters.tabbyandroid.data.local.UiPrefsDefaults
 import at.websters.tabbyandroid.data.local.allKeyIds
 import at.websters.tabbyandroid.data.local.defaultKeyRows
@@ -331,6 +335,7 @@ private fun TerminalPrefsCard(tabsVm: TerminalTabsViewModel) {
 @Composable
 private fun AboutCard() {
     val uriHandler = LocalUriHandler.current
+    var showLicenses by remember { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
@@ -342,10 +347,49 @@ private fun AboutCard() {
                 "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                 style = MaterialTheme.typography.bodyMedium,
             )
-            TextButton(onClick = { uriHandler.openUri("https://github.com/Michi4/tabby-android") }) {
-                Text("Source code (MIT)")
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { uriHandler.openUri("https://github.com/Michi4/tabby-android") }) {
+                    Text("Source code (MIT)")
+                }
+                TextButton(onClick = { showLicenses = true }) {
+                    Text("Open-source licenses")
+                }
             }
         }
+    }
+    if (showLicenses) {
+        AlertDialog(
+            onDismissRequest = { showLicenses = false },
+            title = { Text("Open-source licenses") },
+            text = {
+                Column(
+                    Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    SelectionContainer {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OSS_LIBRARIES.forEach { lib ->
+                                Text(
+                                    "${lib.name} ${lib.version}\n${lib.copyright} — ${lib.licenseId}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                            }
+                            Text(
+                                "Apache License 2.0 (full text)",
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            Text(APACHE_2_0_TEXT, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "JSch BSD-style license (full text)",
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            Text(JSCH_BSD_TEXT, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showLicenses = false }) { Text("Close") } },
+        )
     }
 }
 

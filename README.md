@@ -151,4 +151,8 @@ Tabby and Tabby Web are MIT-licensed open source projects by Eugeny Pankov:
 `Eugeny/tabby` (the desktop terminal) and `Eugeny/tabby-web` (the sync service
 this app talks to). This app is MIT-licensed too (see LICENSE) and speaks the
 same sync API as desktop Tabby — no Tabby artwork is bundled; the icon and
-theme are original.
+theme are original. Third-party libraries (OkHttp, Retrofit, kotlinx,
+SnakeYAML, AndroidX, JSch) ship under Apache-2.0 / BSD terms; their full
+license texts are in the app under Settings → About → Open-source licenses.
+No analytics, no tracking, no data leaves your devices except to servers
+you configure yourself.

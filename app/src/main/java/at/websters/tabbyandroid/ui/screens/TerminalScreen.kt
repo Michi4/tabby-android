@@ -61,6 +61,7 @@ import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.TextDecrease
 import androidx.compose.material.icons.filled.TextIncrease
@@ -437,6 +438,9 @@ private fun TerminalTabBody(
     // (the classic "toggle bugs away" snap-back)
     var follow by rememberSaveable(tab.id) { mutableStateOf(prefs.follow) }
     var fontSize by rememberSaveable(tab.id) { mutableIntStateOf(prefs.fontSize) }
+    // per-tab suggestion switch (toolbar); the Settings toggle is the
+    // default for tabs that never touched it
+    var showSuggestions by rememberSaveable(tab.id) { mutableStateOf(prefs.suggestions) }
     var pwVisible by remember { mutableStateOf(false) }
     // one-shot modifiers live in the top key row (tap = next key, 2×tap = lock)
     var ctrlMode by remember(tab.id) { mutableStateOf(ModMode.OFF) }
@@ -591,6 +595,19 @@ private fun TerminalTabBody(
     LaunchedEffect(tab.id) {
         if (isDemo && tab.conn.state.value == SshState.DISCONNECTED) doConnect("")
     }
+    // Auto-connect once per tab when auth is already set up (tapping play on
+    // Hosts, reopening the app onto restored tabs): no second tap on
+    // Connect. Tabs WITHOUT creds (or after a failed attempt) stay put for
+    // an explicit user action — never a reconnect loop.
+    var autoTried by remember(tab.id) { mutableStateOf(false) }
+    LaunchedEffect(tab.id, keyMat, savedPw) {
+        if (!autoTried && !isDemo && tab.conn.state.value == SshState.DISCONNECTED &&
+            (keyMat != null || savedPw.isNotBlank())
+        ) {
+            autoTried = true
+            doConnect(password.ifBlank { savedPw })
+        }
+    }
 
     Column(modifier.fillMaxSize()) {
         AnimatedVisibility(
@@ -639,6 +656,16 @@ private fun TerminalTabBody(
                         Icons.Filled.SwapHoriz,
                         if (fwdOn) "Pause port forwards" else "Resume port forwards",
                         tint = if (fwdStatus.isNotBlank() && fwdOn) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = {
+                    showSuggestions = !showSuggestions
+                }, modifier = Modifier.testTag("suggestion_toggle")) {
+                    Icon(
+                        Icons.Filled.Star,
+                        if (showSuggestions) "Hide command suggestions" else "Show command suggestions",
+                        tint = if (showSuggestions) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -1134,44 +1161,42 @@ private fun TerminalTabBody(
         }
 
         // ---- history suggestions (tap a chip to fill the line for review;
-        // frequency-ranked, learned from submitted commands, toggle in Settings)
-        // Fixed height ALWAYS: chips fading in/out must never resize the
-        // terminal viewport — every height change is a SIGWINCH and the
-        // server reprints the prompt line for each one (scrollback fills
-        // with duplicated prompts while typing).
+        // frequency-ranked, learned from submitted commands, per-tab toggle
+        // in the toolbar, global default in Settings). Collapses to zero
+        // height when empty — no reserved dead space. Appearing/disappearing
+        // resizes the viewport, which is loss-neutral since the resize fix
+        // (cursor stays glued, no prompt duplication); the old fixed-height
+        // box existed only to avoid that churn.
         val currentLine = input.text.replace(SENDER_SENTINEL, "")
-        val suggestions = remember(currentLine, histTick) {
-            if (!prefs.suggestions) emptyList()
+        val suggestions = remember(currentLine, histTick, showSuggestions, prefs.suggestions) {
+            if (!prefs.suggestions || !showSuggestions) emptyList()
             else at.websters.tabbyandroid.data.local.rankSuggestions(tabsVm.loadHistory(), currentLine)
         }
-        Box(
-            Modifier.fillMaxWidth().height(36.dp).padding(horizontal = 4.dp),
-            contentAlignment = Alignment.CenterStart,
+        AnimatedVisibility(
+            visible = suggestions.isNotEmpty(),
+            enter = expandVertically(tween(180)) + fadeIn(tween(180)),
+            exit = shrinkVertically(tween(180)) + fadeOut(tween(180)),
         ) {
-            androidx.compose.animation.AnimatedVisibility(
-                visible = suggestions.isNotEmpty(),
-                enter = fadeIn(tween(180)),
-                exit = fadeOut(tween(180)),
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .testTag("suggestion_bar"),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    suggestions.forEach { s ->
-                        AssistChip(
-                            onClick = { fillLine(s) },
-                            label = {
-                                Text(
-                                    s,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 12.sp,
-                                )
-                            },
-                        )
-                    }
+                suggestions.forEach { s ->
+                    AssistChip(
+                        onClick = { fillLine(s) },
+                        label = {
+                            Text(
+                                s,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                            )
+                        },
+                    )
                 }
             }
         }
