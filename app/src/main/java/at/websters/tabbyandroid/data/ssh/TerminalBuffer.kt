@@ -82,10 +82,29 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
     private var cursorVisible = true
     private var wrapAround = true
     private var bracketedPasteMode = false
+    /**
+     * Mouse-reporting mode the server last requested (DECSET 1000/1002/1003,
+     * 0 = off). 1006 only switches the ENCODING ([mouseSgr]); the mode
+     * itself comes from 1000/1002/1003, like xterm.
+     */
+    private var mouseMode = 0
+    private var mouseSgr = false
 
     /** True while the server has enabled DEC private mode 2004. */
     @get:Synchronized
     val bracketedPaste: Boolean get() = bracketedPasteMode
+
+    /** Active mouse-reporting mode: 0 = off, else 1000/1002/1003. */
+    @get:Synchronized
+    val mouseTracking: Int get() = mouseMode
+
+    /** True while the server requested SGR (1006) mouse encoding. */
+    @get:Synchronized
+    val mouseSgrEncoding: Boolean get() = mouseSgr
+
+    /** True while the alternate screen is active (vim/opencode-style TUIs). */
+    @get:Synchronized
+    val altScreen: Boolean get() = altActive
     // scroll margins, 0-based inclusive, relative to the visible viewport
     private var scrollTop = 0
     private var scrollBottom = rows - 1
@@ -112,6 +131,10 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
     private fun blankLine(): MutableList<Cell> = MutableList(cols) { Cell() }
 
     private fun blankCell(): Cell = Cell()
+
+    /** No visible content: spaces on the default background (safe to drop). */
+    private fun isBlankLine(line: List<Cell>): Boolean =
+        line.all { it.ch == ' ' && it.bg == 0 && !it.reverse }
 
     @Synchronized
     fun snapshot(): Snapshot {
@@ -177,8 +200,27 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
                     if (j >= end) { carry = incoming.copyOfRange(i, end); break }
                     val cmd = incoming[j].toInt().toChar()
                     val params = incoming.slice(i + 2 until j).map { it.toInt().toChar() }.joinToString("").split(";")
-                    handleCsi(cmd, params)
-                    i = j + 1
+                    if (cmd == 'M' && params.size == 1 && params[0].isEmpty() && mouseTracking != 0) {
+                        // X10 mouse event (`ESC [ M Cb Cx Cy`, no 1006): the
+                        // three bytes after M belong to the event, not the
+                        // screen. A bare DL here is unrepresentable while a
+                        // mouse app runs (xterm resolves the same way — this
+                        // ambiguity is why SGR 1006 exists). Incomplete tail
+                        // waits for the rest via carry, like any split read.
+                        if (j + 3 >= end) { carry = incoming.copyOfRange(i, end); break }
+                        val b1 = incoming[j + 1].toInt() and 0xFF
+                        val b2 = incoming[j + 2].toInt() and 0xFF
+                        val b3 = incoming[j + 3].toInt() and 0xFF
+                        if (b1 in 32..255 && b2 in 32..255 && b3 in 32..255) {
+                            i = j + 4
+                        } else {
+                            handleCsi(cmd, params)
+                            i = j + 1
+                        }
+                    } else {
+                        handleCsi(cmd, params)
+                        i = j + 1
+                    }
                 }
                 b == 0x1B && i + 1 < end && (incoming[i + 1] == 'M'.code.toByte() || incoming[i + 1] == 'c'.code.toByte()) -> {
                     if (incoming[i + 1] == 'M'.code.toByte()) reverseIndex() else reset()
@@ -436,6 +478,16 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
         val nc = newCols.coerceIn(20, 300)
         val nr = newRows.coerceIn(5, 200)
         if (nc == cols && nr == rows) return
+        // Glue the cursor to its PHYSICAL line across the resize (xterm):
+        // the viewport base shifts when rows change, so a blind clamp
+        // teleports the cursor to another line — and the next readline
+        // redraw (SIGWINCH → CPR → reprint) lands on the wrong line,
+        // duplicating prompts on every keyboard toggle. Recompute the
+        // screen-relative row from the pre-resize physical row instead.
+        // Front trims (scrollback bound) shift physical indices down.
+        val cursorPhys = viewportBase() + cursorRow
+        val activeIsAlt = altActive
+        var frontTrimmed = 0
         for (deque in listOf(main, alt)) {
             for (idx in deque.indices) {
                 val line = deque[idx]
@@ -449,9 +501,32 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
         rows = nr
         while (main.size < nr) main.addLast(blankLine())
         while (alt.size < nr) alt.addLast(blankLine())
-        while (alt.size > nr) alt.removeFirst()
-        while (main.size > nr + maxScrollback) main.removeFirst()
-        cursorRow = cursorRow.coerceIn(0, nr - 1)
+        while (alt.size > nr) {
+            alt.removeFirst()
+            if (activeIsAlt) frontTrimmed++
+        }
+        while (main.size > nr + maxScrollback) {
+            main.removeFirst()
+            if (!activeIsAlt) frontTrimmed++
+        }
+        // Drop trailing blank FILLER on the main screen (fresh-shell padding
+        // from ensureRow): a shrink must not slide the window past the cursor
+        // line when only blanks sit below it — the cursor would leave the
+        // visible window and the next redraw would strand a duplicate prompt.
+        // Never touches the cursor's own line or non-blank content; blanks
+        // re-pad on the next grow.
+        if (!activeIsAlt) {
+            val physAdj = cursorPhys - frontTrimmed
+            // Trim while the window starts below the cursor line: each
+            // dropped filler row moves the window up one toward the cursor.
+            while (main.size > nr && main.size - nr > physAdj &&
+                main.size - 1 != physAdj && isBlankLine(main.last())
+            ) {
+                // NOTE: removeAt, never removeLast() (see above).
+                main.removeAt(main.lastIndex)
+            }
+        }
+        cursorRow = (cursorPhys - frontTrimmed - viewportBase()).coerceIn(0, nr - 1)
         cursorCol = cursorCol.coerceIn(0, nc - 1)
         scrollTop = 0
         scrollBottom = nr - 1
@@ -474,6 +549,7 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
         curFg = 7; curBg = 0; curBold = false
         curReverse = false; curUnderline = false; curDim = false
         cursorVisible = true; wrapAround = true; bracketedPasteMode = false
+        mouseMode = 0; mouseSgr = false
         scrollTop = 0; scrollBottom = rows - 1
         savedRow = 0; savedCol = 0
         version++; _updates.value = version
@@ -580,6 +656,12 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
 
     private fun handleCsi(cmd: Char, params: List<String>) {
         val private = params.firstOrNull()?.startsWith("?") == true
+        // Intermediate bytes change the meaning (`<` SGR mouse echoes,
+        // `>`/`=` device queries, `$`/`"`/`'`/` ` DECRQM-style requests…).
+        // We only implement plain + `?`-private sequences: anything else is
+        // swallowed, NEVER executed as its final letter — an echoed mouse
+        // click (`CSI < … M`) must not delete lines like `M` (DL) would.
+        if (params.any { p -> p.any { c -> c == '<' || c == '>' || c == '=' || c == '$' || c == '"' || c == '\'' || c == ' ' } }) return
         fun p(i: Int, def: Int): Int = params.getOrNull(i)?.filter { it.isDigit() }?.toIntOrNull() ?: def
         fun allNums(): List<Int> = params.mapNotNull { it.filter { c -> c.isDigit() }.toIntOrNull() }
         when (cmd) {
@@ -745,9 +827,16 @@ class TerminalBuffer(var cols: Int = 80, var rows: Int = 24, var maxScrollback: 
                         }
                         1049 -> if (on) enterAlt(clear = true, saveCursor = true) else exitAlt(restoreCursor = true)
                         2004 -> if (private) bracketedPasteMode = on
-                        // mouse 1000/1002/1003/1005/1006/1010/1015/1016,
-                        // 12 cursor blink, 1 cursor keys — accepted, no-op.
-                        1000, 1002, 1003, 1005, 1006, 1010, 1015, 1016, 12, 1 -> Unit
+                        // mouse tracking: 1000 press-only, 1002 button-event,
+                        // 1003 any-event (mode); 1006 switches SGR encoding.
+                        1000, 1002, 1003 -> if (private) {
+                            mouseMode = if (on) n else if (mouseMode == n) 0 else mouseMode
+                        }
+                        1006 -> if (private) mouseSgr = on
+                        // legacy 1005/1010/1015/1016 encodings (folded into
+                        // SGR/X10 above), 12 cursor blink, 1 cursor keys —
+                        // accepted, no-op.
+                        1005, 1010, 1015, 1016, 12, 1 -> Unit
                         else -> Unit
                     }
                 }

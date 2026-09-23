@@ -249,3 +249,88 @@ No Batch 2 needed for release — remaining items are low hardening (none block 
 ## Go / No-Go: **GO**
 
 Shippable as GitHub-release APK. No HIGH/CRITICAL open. CI green on last push (`845a571`); next push will re-verify (expected green — 176/0 + lint 0 already green locally). No secrets in tree or history (one dummy `BEGIN PRIVATE` test fixture verified at `app/src/test/.../SshKeyManagerTest.kt:32`). No destructive action taken in this audit run.
+
+---
+
+# Audit run 2 — 2026-09-22 (v1.4.14 → v1.4.15, live user issues + full re-verification)
+
+Scope delta since run 1: SSH pty-resize serialization (1.4.10–1.4.12), folder null/search fixes (1.4.10), vault YAML-safety fail-closed (1.4.13), vault diagnosis + tolerant decoding (1.4.14), vault raw-text rescue (1.4.15). Recon re-done via three read-only subagent passes (UI inventory, network/SSH surface, data layer) — findings below supersede run-1 items where noted.
+
+## Phase 0 — Inventory (delta)
+
+- Stack unchanged: Kotlin 2.0.20, AGP 8.5.2, targetSdk/compileSdk 36, minSdk 26, junit4 unit + instrumentation tests. No Room (DataStore + EncryptedSharedPreferences by design).
+- Routes: 3 (`connections`, `terminal`, `settings`), no deep links; 1 exported Activity, FileProvider non-exported, 2 permissions (INTERNET, REQUEST_INSTALL_PACKAGES). Evidence: `ui/TabbyApp.kt:46-48`, `AndroidManifest.xml:4-35`.
+- Endpoints: Tabby Web `GET api/1/configs`, `GET api/1/configs/{id}`, `PATCH api/1/configs/{id}` (Bearer, HTTPS-enforced) + GitHub releases check/download for the updater. Evidence: `data/sync/TabbySyncApi.kt:15-31`, `data/update/UpdateCheck.kt:85-105`.
+- Storage: plaintext DataStore `tabby_client` (inventory, UI prefs, scrollback restore) + Keystore-encrypted `tabby_secrets` (tokens, SSH passwords/keys, vault passphrases, history/macros) + `filesDir/known_hosts`. Evidence: `data/local/ProfileRepository.kt:24-29`, `data/local/SecureTokenStorage.kt:20-44`.
+
+## Phase 3 — Security (re-verified 2026-09-22)
+
+### [INFO] CVE-2026-86231 (mwiede:jsch cert-revocation) — NOT AFFECTED
+**Where:** `app/build.gradle.kts:110` (`com.github.mwiede:jsch:2.28.7`)
+**Evidence:** websearch confirms CVE-2026-86231 affects mwiede:jsch up to 2.28.5, fixed in 2.28.6+ (Snyk SNYK-JAVA-COMGITHUBMWIEDE-19639692). Pinned version 2.28.7 > fixed version.
+**Fix:** none needed; keep pin ≥ 2.28.6 on every bump.
+
+### [INFO] CVE-2022-1471 (SnakeYAML RCE) — NOT AFFECTED
+**Where:** `app/build.gradle.kts:107` (`org.yaml:snakeyaml:2.3`), `data/sync/TabbyYamlParser.kt:37` (`SafeConstructor`)
+**Evidence:** NVD: affected < 2.0. Pinned 2.3, and all parses use explicit `SafeConstructor` (never the resolving constructor).
+**Fix:** none needed.
+
+### [INFO] Secret scan (tree + full history) — CLEAN
+**Where:** repo-wide grep + `git log --all -S`
+**Evidence:** 2026-09-22 run: no live password/token in tree or history; no private key material in `app/src/main`; single `BEGIN OPENSSH PRIVATE KEY` hit is the known dummy fixture (`app/src/test/.../SshKeyManagerTest.kt`, body `\nx\n`).
+**Fix:** none needed.
+
+### [MEDIUM, carried] Updater installs APK with no hash/signature check (carried from recon; run 1 listed URL-allowlist only)
+**Where:** `data/update/UpdateCheck.kt:104-105` (picks first `.apk`), `ui/state/UpdateViewModel.kt:197` (only `<1MB` size gate)
+**Evidence:** code read 2026-09-22: HTTPS + host allowlist exist, but no SHA-256/signature verification against release metadata. GitHub-account or asset compromise = user-tapped code exec.
+**Impact:** updater users (auto-download defaults ON, install is explicit tap).
+**Fix:** TODO — pin SHA-256 per release (attach checksums file to releases) or verify APK signature cert against the release keystore before PackageInstaller commit.
+
+### [MEDIUM, carried] Plaintext scrollback restore may keep on-screen secrets
+**Where:** `data/local/ProfileRepository.kt:624-640`, `ui/state/ViewModels.kt:425-431`
+**Evidence:** subagent data-layer pass 2026-09-22: `open_tabs_scrollback_json` (10 tabs × 200 lines) is plaintext in DataStore; filter is typed-command regex only, misses command OUTPUT secrets (`cat id_rsa`, `env`, pasted tokens).
+**Fix:** TODO — move scrollback seed to EncryptedSharedPreferences or stop persisting it.
+
+## Phase 1+6 — Terminal UX (live user reports 2026-09-19/22, verified against code)
+
+### [HIGH] Keyboard resize duplicates prompts / cuts first char (user screenshots)
+**Where:** `ui/screens/TerminalScreen.kt:749-770` (viewport → `buffer.resize` + `setPtySize`), `data/ssh/TerminalBuffer.kt:435-464`
+**Evidence:** user screenshots show repeated `home@home:~$` + `ome@home` truncation after keyboard toggles. Live repro test added: `app/src/androidTest/.../TerminalResizeLiveTest.kt` (3 shrink/restore cycles over real SSH, asserts prompt count + no truncation). Emulator cold-boot blocked verification at report time — rerun pending.
+**Fix:** in progress — make resize loss-neutral (cursor tracking across SIGWINCH), then remove the 36dp suggestion-box crutch (`TerminalScreen.kt:1068-1073`).
+
+### [HIGH] No touch interactivity (tap-to-cursor, scroll-to-app in vim/opencode, spacebar swipe)
+**Where:** `ui/screens/TerminalTouch.kt:20-124` (scroll+pinch only; taps deliberately unconsumed), `TerminalScreen.kt:895-924` (sender swallows cursor-only moves: `input = nv // cursor/selection move only`)
+**Evidence:** code read: tap does nothing; selection-only moves are preserved locally and never forwarded, so Gboard spacebar-swipe cannot move the remote cursor.
+**Fix:** TODO — tap → arrow-key deltas on plain shell / SGR mouse events when app enabled mouse tracking; wheel events to alt-screen; selection-delta → `←/→` sends.
+
+### [MEDIUM] Suggestion bar wastes 36dp when empty; no top-bar toggle
+**Where:** `TerminalScreen.kt:1079-1109` (fixed-height Box), Settings has only a global kill-switch
+**Evidence:** user screenshot (red circle) + code comment admitting the fixed height exists to avoid SIGWINCH churn.
+**Fix:** TODO after resize fix — collapse to zero when empty, floating pills, toolbar toggle.
+
+### [MEDIUM] Arrow keys don't repeat on hold; connection doesn't survive process death gracefully
+**Where:** `TerminalKeyRow` (tap-only, `TerminalScreen.kt:1129-1145`); tabs restore as DISCONNECTED (`ui/state/ViewModels.kt:394-423`) with one-tap reconnect
+**Evidence:** user reports 2026-09-19/22.
+**Fix:** TODO — long-press repeat; auto-reconnect attempt on resume when creds are stored (explicit, cancellable).
+
+## Phase 7 — Testing (2026-09-22)
+
+- Full JVM suite: **237 tests, 0 failures, 0 errors** (`./gradlew :app:testDebugUnitTest`, BUILD SUCCESSFUL). Evidence: `/tmp/opencode/full_unittests.log`, `app/build/test-results/testDebugUnitTest/*.xml`.
+- Vault rescue proof (1.4.15): crafted real vault (PBKDF2-SHA512×100000/AES-256-CBC) with Double-loaded intact-hex salt OPENS on pull and round-trips on push; `.inf`/`1.2e+35` stay fail-closed with backup guidance. Evidence: `VaultSyncTest.intactHexSaltPullOpensAfterRescue/intactHexSaltPushRoundTrips`, `VaultCryptoTest.intactHexSaltEnvelopeValidViaRaw`.
+- Live instrumentation (emulator): BLOCKED — AVD `tabby-test` cold boot wedged (qemu idle, `adb offline`); relaunched with `-show-kernel`, pending at report time.
+
+## Interim scorecard (run 2, work continues tonight)
+
+| Phase | Verdict | Open HIGH/CRITICAL |
+|---|---|---|
+| 0 Recon | Clean (delta mapped) | — |
+| 1 Frontend | 1 HIGH + 2 MEDIUM open (terminal) | resize duplication |
+| 2 API-client | Clean | — |
+| 3 Security | 2 MEDIUM carried (updater sig, scrollback) | — |
+| 4 Data | Clean (quarantine verified) | — |
+| 5 Infra | Clean (signed releases, keystore off-git) | — |
+| 6 Journeys | 1 HIGH open (touch interactivity) | touch |
+| 7 Testing | 237/0 JVM; instrumentation pending emulator | — |
+
+## Go / No-Go: **CONDITIONAL GO**
+Shippable (v1.4.15 released with vault rescue). Blockers for full GO: terminal resize duplication fix + emulator-verified touch/resize tests. No destructive action taken; shutdown pending user request at end of run.

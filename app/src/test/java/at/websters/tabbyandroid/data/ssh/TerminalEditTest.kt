@@ -51,4 +51,25 @@ class TerminalEditTest {
         assertEquals(EditOp(1, "\uD83D\uDE00"), diffEdit("a中b", "a\uD83D\uDE00b"))
         assertEquals(EditOp(1, "中"), diffEdit("a\uD83D\uDE00b", "a中b"))
     }
+
+    @Test fun swipeRightSendsRightArrows() {
+        // Gboard spacebar-swipe: same text, cursor glides right.
+        assertEquals("\u001B[C\u001B[C\u001B[C", cursorMoveArrows("\uFEFFabc", 1, "\uFEFFabc", 4))
+    }
+
+    @Test fun swipeLeftSendsLeftArrows() {
+        assertEquals("\u001B[D\u001B[D", cursorMoveArrows("\uFEFFabc", 4, "\uFEFFabc", 2))
+    }
+
+    @Test fun noMoveSendsNothing() {
+        assertNull(cursorMoveArrows("\uFEFFabc", 2, "\uFEFFabc", 2))
+    }
+
+    @Test fun textChangeNeverMapsToArrows() {
+        assertNull(cursorMoveArrows("\uFEFFabc", 1, "\uFEFFabcd", 4))
+    }
+
+    @Test fun negativePositionsAreIgnored() {
+        assertNull(cursorMoveArrows("\uFEFFabc", -1, "\uFEFFabc", 2))
+    }
 }

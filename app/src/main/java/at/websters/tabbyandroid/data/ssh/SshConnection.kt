@@ -110,7 +110,15 @@ class SshConnection(
             try {
                 input.write(bytes)
                 input.flush()
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                // Never silent: a dead pipe means every keystroke vanishes.
+                // Surface it in logcat AND the status line (UI reads status).
+                // Intentional closes (networkClosed) keep their DISCONNECTED.
+                android.util.Log.w("TabbySshIo", "stdin write failed (${bytes.size}B): $e")
+                if (!networkClosed) {
+                    _status.value = "Connection broken — reconnect"
+                    _state.value = SshState.ERROR
+                }
             }
         }
     }

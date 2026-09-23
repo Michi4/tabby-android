@@ -1,5 +1,6 @@
 package at.websters.tabbyandroid.ui.screens
 
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -12,13 +13,16 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
@@ -82,9 +86,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -103,6 +109,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -132,11 +139,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import at.websters.tabbyandroid.data.local.UiPrefs
 import at.websters.tabbyandroid.data.local.UiPrefsDefaults
 import at.websters.tabbyandroid.data.local.nextKeyRows
+import at.websters.tabbyandroid.data.ssh.CURSOR_LEFT
+import at.websters.tabbyandroid.data.ssh.CURSOR_RIGHT
 import at.websters.tabbyandroid.data.ssh.CtrlKeys
 import at.websters.tabbyandroid.data.ssh.DEMO_SHELL_PREFIX
 import at.websters.tabbyandroid.data.ssh.SENDER_SENTINEL
 import at.websters.tabbyandroid.data.ssh.SshState
 import at.websters.tabbyandroid.data.ssh.TerminalBuffer
+import at.websters.tabbyandroid.data.ssh.MouseReport
+import at.websters.tabbyandroid.data.ssh.cursorMoveArrows
 import at.websters.tabbyandroid.data.ssh.senderEdit
 import at.websters.tabbyandroid.ui.state.ConnectionsViewModel
 import at.websters.tabbyandroid.ui.state.SshKeysViewModel
@@ -145,6 +156,7 @@ import at.websters.tabbyandroid.ui.theme.statusColor
 import at.websters.tabbyandroid.ui.theme.statusLabel
 import at.websters.tabbyandroid.ui.theme.termColor
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 internal const val ESC = "\u001B"
@@ -809,9 +821,41 @@ private fun TerminalTabBody(
                 lineHeight = (fontSize + 5).sp,
             )
             val hScroll = rememberScrollState()
+            // Touch-to-cursor: a tap lands on a screen cell (content
+            // coordinates include scroll; history sits above the screen).
+            // - TUI with mouse tracking (vim/opencode): real click event.
+            // - plain shell: glide the cursor within its own row with
+            //   arrows (other rows: focus only, never history-recall).
+            // Parked (reading history) or dead tabs: focus only.
+            // Latest-state indirection: the detector itself only restarts on
+            // font changes, so a tap is never cancelled by streaming output.
+            val tapHandler = rememberUpdatedState { off: androidx.compose.ui.geometry.Offset ->
+                focusRequester.requestFocus()
+                keyboard?.show()
+                if (state != SshState.CONNECTED || userHeld) return@rememberUpdatedState
+                val buf = tab.conn.buffer
+                val padPx = with(density) { 8.dp.toPx() }
+                // Horizontal scroll shifts content left: add it back so the
+                // tapped cell maps to the true buffer column.
+                val vc = (((off.x - padPx + hScroll.value) / cellW).toInt())
+                    .coerceIn(0, buf.cols - 1)
+                val vr = (((off.y - padPx) / lineH).toInt()).coerceAtLeast(0)
+                val sr = vr - histCells.size
+                if (sr !in 0 until buf.rows) return@rememberUpdatedState
+                if (buf.mouseTracking != 0) {
+                    tab.conn.send(MouseReport.tap(vc + 1, sr + 1, buf.mouseSgrEncoding))
+                    return@rememberUpdatedState
+                }
+                if (sr == snapshot.cursorRow) {
+                    val d = vc - snapshot.cursorCol
+                    if (d > 0) tab.conn.send(CURSOR_RIGHT.repeat(d))
+                    else if (d < 0) tab.conn.send(CURSOR_LEFT.repeat(-d))
+                }
+            }
             // touch routing (see terminalTouch): one finger drags scroll with
-            // fling, two fingers pinch-zoom the font; tap and long-press
-            // selection pass through untouched
+            // fling, two fingers pinch-zoom the font; tap positions the
+            // cursor (above); long-press selection passes through untouched.
+            // A TUI with mouse tracking captures drags as wheel notches.
             Column(
                 Modifier.fillMaxSize()
                     .background(Color.Black)
@@ -827,13 +871,27 @@ private fun TerminalTabBody(
                         // Manual drags park the view (follow resumes only via
                         // live-return actions, never by itself).
                         onUserDrag = { userHeld = true },
+                        wheelCapture = {
+                            tab.conn.buffer.altScreen &&
+                                tab.conn.buffer.mouseTracking != 0 && !userHeld
+                        },
+                        wheelStepPx = { lineH },
+                        onWheel = { up ->
+                            if (state == SshState.CONNECTED) {
+                                val buf = tab.conn.buffer
+                                tab.conn.send(
+                                    MouseReport.wheel(
+                                        up, buf.cols / 2 + 1, buf.rows / 2 + 1,
+                                        buf.mouseSgrEncoding,
+                                    )
+                                )
+                            }
+                        },
                     )
                     .verticalScroll(scroll)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = { focusRequester.requestFocus(); keyboard?.show() },
-                    ),
+                    .pointerInput(cellW, lineH) {
+                        detectTapGestures(onTap = { tapHandler.value(it) })
+                    },
             ) {
                 SelectionContainer {
                     // NEVER soft-wrap: buffer lines are exactly cols wide and
@@ -915,6 +973,16 @@ private fun TerminalTabBody(
                 }
                 val edit = senderEdit(input.text, nv.text)
                 if (edit.sendText.isEmpty() && edit.deletions == 0) {
+                    // Cursor-only move (notably Gboard spacebar-swipe): glide
+                    // the REMOTE cursor with plain arrows so it follows the
+                    // finger. Text is identical here, so field/server deltas
+                    // agree; ranged selections are left alone (input = nv).
+                    if (input.selection.collapsed && nv.selection.collapsed) {
+                        cursorMoveArrows(
+                            input.text, input.selection.start,
+                            nv.text, nv.selection.start,
+                        )?.let { tab.conn.send(it) }
+                    }
                     input = nv // cursor/selection move only — preserve it
                 } else {
                     repeat(edit.deletions) { tab.conn.send(CtrlKeys.byteString(127.toByte())) }
@@ -1360,6 +1428,43 @@ private fun renderScreen(
 }
 
 /**
+ * Hold-to-repeat key wrapper (real-keyboard feel: tap sends once, holding
+ * past the initial delay auto-fires until release). ONE clickable owns the
+ * tap; the [repeatKeyGesture] press path owns the repeat and the click path
+ * stands down when a repeat just fired (timestamp guard), so taps never
+ * double-send and releases never append a stray extra. Ripple preserved.
+ * Deliberately NOT used for Enter/modifiers by callers.
+ */
+@Composable
+private fun RepeatKeyButton(
+    onFire: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val latestFire by rememberUpdatedState(onFire)
+    val lastRepeatFire = remember { mutableLongStateOf(0L) }
+    Box(
+        modifier
+            .repeatKeyGesture(
+                onRepeat = {
+                    latestFire()
+                    lastRepeatFire.longValue = SystemClock.uptimeMillis()
+                },
+            )
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = LocalIndication.current,
+                onClick = {
+                    if (SystemClock.uptimeMillis() - lastRepeatFire.longValue > 300) latestFire()
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
+    }
+}
+
+/**
  * One customizable key row (Settings → Key layout reuses this for the live
  * preview). Modifier ids render as one-shot chips, up/down as arrow icons
  * (content-described, no text needed), Enter submits, everything else sends
@@ -1387,12 +1492,12 @@ internal fun TerminalKeyRow(
                 "ctrl" -> ModChip(label = "Ctrl", mode = ctrlMode, onClick = { onModifier("ctrl") })
                 "alt" -> ModChip(label = "Alt", mode = altMode, onClick = { onModifier("alt") })
                 "altgr" -> ModChip(label = "AltGr", mode = altGrMode, onClick = { onModifier("altgr") })
-                "up" -> IconButton(
-                    onClick = { at.websters.tabbyandroid.data.local.keySeqFor("up")?.let(onSend) },
+                "up" -> RepeatKeyButton(
+                    onFire = { at.websters.tabbyandroid.data.local.keySeqFor("up")?.let(onSend) },
                     modifier = Modifier.size(36.dp),
                 ) { Icon(Icons.Filled.KeyboardArrowUp, "Up") }
-                "down" -> IconButton(
-                    onClick = { at.websters.tabbyandroid.data.local.keySeqFor("down")?.let(onSend) },
+                "down" -> RepeatKeyButton(
+                    onFire = { at.websters.tabbyandroid.data.local.keySeqFor("down")?.let(onSend) },
                     modifier = Modifier.size(36.dp),
                 ) { Icon(Icons.Filled.KeyboardArrowDown, "Down") }
                 "enter" -> TextButton(
@@ -1402,9 +1507,10 @@ internal fun TerminalKeyRow(
                 else -> {
                     val seq = at.websters.tabbyandroid.data.local.keySeqFor(id)
                     if (seq != null) {
-                        TextButton(
-                            onClick = { onSend(seq) },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                        RepeatKeyButton(
+                            onFire = { onSend(seq) },
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp)
+                                .defaultMinSize(minWidth = 40.dp, minHeight = 36.dp),
                         ) {
                             Text(
                                 at.websters.tabbyandroid.data.local.keyLabelFor(id),

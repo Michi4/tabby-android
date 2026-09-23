@@ -370,4 +370,79 @@ class TerminalBufferTest {
         assertTrue(b.historyWindow(100).isEmpty())
         assertEquals(5, b.snapshot().lines.size)
     }
+
+    @Test fun resizeKeepsCursorGluedToPhysicalLine() {
+        // Keyboard-toggle shrink: the cursor must stay on the SAME content
+        // line (blind clamping teleports it, and the next readline redraw
+        // then duplicates the prompt — the green-circle bug).
+        val b = TerminalBuffer(cols = 20, rows = 10)
+        for (i in 1..7) b.feed("line$i\n".toByteArray())
+        b.feed("line8".toByteArray())
+        fun cursorLine(s: TerminalBuffer.Snapshot): String =
+            s.lines[s.cursorRow].joinToString("") { it.ch.toString() }.trim()
+        val before = b.snapshot()
+        assertEquals("line8", cursorLine(before))
+        val physBefore = b.visibleBase() + before.cursorRow
+        b.resize(20, 5)
+        val shrunk = b.snapshot()
+        assertEquals("line8", cursorLine(shrunk))
+        assertEquals(physBefore, b.visibleBase() + shrunk.cursorRow)
+        b.resize(20, 10)
+        val grown = b.snapshot()
+        assertEquals("line8", cursorLine(grown))
+        assertEquals(physBefore, b.visibleBase() + grown.cursorRow)
+    }
+
+    @Test fun echoedSgrMouseNeverDeletesLines() {
+        // Our own tap/wheel bytes come back via pty echo; the SGR sequences
+        // must be swallowed, never executed as DL (M) — or every click would
+        // eat screen lines.
+        val b = TerminalBuffer(cols = 20, rows = 6)
+        b.feed("aaa\r\nbbb\r\nccc\r\n".toByteArray())
+        val before = b.visibleText()
+        b.feed("\u001B[<0;5;3M\u001B[<3;5;3m".toByteArray()) // tap press+release
+        b.feed("\u001B[<64;5;3M".toByteArray()) // wheel up
+        b.feed("\u001B[<65;5;3M".toByteArray()) // wheel down
+        assertEquals(before, b.visibleText())
+    }
+
+    @Test fun x10MouseBytesConsumedWhileTracking() {
+        // Legacy encoding (`ESC [ M Cb Cx Cy`) while 1000 (no 1006) is on:
+        // consumed silently, never DL + literal splatter.
+        val b = TerminalBuffer(cols = 20, rows = 6)
+        b.feed("aaa\r\nbbb\r\nccc\r\n".toByteArray())
+        b.feed("\u001B[?1000h".toByteArray())
+        val before = b.visibleText()
+        b.feed("\u001B[M \u0025#".toByteArray()) // press button 0 at 5,3
+        b.feed("\u001B[M#%#".toByteArray()) // release at 5,3
+        assertEquals(before, b.visibleText())
+    }
+
+    @Test fun splitX10MouseReassembles() {
+        val b = TerminalBuffer(cols = 20, rows = 6)
+        b.feed("aaa\r\nbbb\r\nccc\r\n".toByteArray())
+        b.feed("\u001B[?1000h".toByteArray())
+        val before = b.visibleText()
+        b.feed("\u001B[M ".toByteArray()) // partial: M + 1 of 3 bytes
+        assertEquals(before, b.visibleText())
+        b.feed("\u0025#".toByteArray()) // remainder
+        assertEquals(before, b.visibleText())
+    }
+
+    @Test fun bareDeleteLineStillWorks() {
+        // No mouse tracking: `ESC[M` is DL as before (regression guard for
+        // the X10 special case), and DECSET still applies (gate guard).
+        val b = TerminalBuffer(cols = 20, rows = 6)
+        b.feed("aaa\r\nbbb\r\nccc".toByteArray())
+        b.feed("\u001B[2;1H".toByteArray()) // cursor to row 2 = "bbb" (1-based)
+        b.feed("\u001B[M".toByteArray()) // delete 1 line
+        val vis = b.visibleText()
+        assertTrue("bbb should be gone: $vis", !vis.lines().any { it.trim() == "bbb" })
+        assertTrue("ccc should survive: $vis", vis.lines().any { it.trim() == "ccc" })
+        val c = TerminalBuffer(cols = 20, rows = 6)
+        c.feed("\u001B[?25l".toByteArray())
+        assertTrue(!c.snapshot().cursorVisible)
+        c.feed("\u001B[?25h".toByteArray())
+        assertTrue(c.snapshot().cursorVisible)
+    }
 }

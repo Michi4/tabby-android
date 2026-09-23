@@ -69,29 +69,49 @@ class TerminalResizeLiveTest {
             Log.i("TabbyResizeTest", "viewport cols=$cols rows=$rows")
             assertTrue("viewport too small to simulate keyboard: cols=$cols rows=$rows", rows > 16)
 
-            val promptsBefore = promptLines(conn.buffer.visibleText())
-            // Three keyboard open/close cycles: shrink rows, let SIGWINCH +
-            // readline redraw settle, restore.
-            repeat(3) {
-                conn.buffer.resize(cols, rows - 12)
-                conn.setPtySize(cols, rows - 12)
-                Thread.sleep(1_500)
-                conn.buffer.resize(cols, rows)
-                conn.setPtySize(cols, rows)
-                Thread.sleep(1_500)
+            // Phase A — fresh shell: type WITHOUT submitting (like the user
+            // editing a command when the keyboard toggles). readline redraws
+            // this prompt+input on every SIGWINCH, exposing cursor drift.
+            "echo RESIZE_TYPED".forEach {
+                conn.send(it.toString())
+                Thread.sleep(30)
             }
-            Thread.sleep(2_000)
+            Thread.sleep(1_500)
+            cycleKeyboard(conn, cols, rows)
             assertEquals("resize dropped the session", SshState.CONNECTED, conn.state.value)
-            val after = conn.buffer.visibleText()
-            val promptsAfter = promptLines(after)
-            Log.i(
-                "TabbyResizeTest",
-                "prompts before=$promptsBefore after=$promptsAfter\n---AFTER---\n$after\n---END---",
-            )
-            assertTrue(
-                "keyboard resizes duplicated prompts ($promptsBefore -> $promptsAfter)",
-                promptsAfter <= promptsBefore + 2,
-            )
+            var after = conn.buffer.visibleText()
+            var prompts = promptTotal(after)
+            var typed = after.split("echo RESIZE_TYPED").size - 1
+            Log.i("TabbyResizeTest", "phase A prompts=$prompts typed=$typed\n---AFTER---\n$after\n---END---")
+            assertEquals("fresh-shell resize duplicated prompts/content", 1, prompts)
+            assertEquals("fresh-shell resize duplicated the typed line", 1, typed)
+
+            // Phase B — full screen (the real user scenario): scroll the
+            // screen full, leave an unsubmitted line, cycle again. The prompt
+            // inventory must be bit-identical afterwards.
+            conn.send("\r") // submit the phase-A line, fresh prompt at bottom
+            Thread.sleep(800)
+            repeat(30) { i ->
+                "echo filler-$i".forEach { conn.send(it.toString()) }
+                conn.send("\r")
+                Thread.sleep(120)
+            }
+            Thread.sleep(1_500)
+            "echo RESIZE_FULL".forEach {
+                conn.send(it.toString())
+                Thread.sleep(30)
+            }
+            Thread.sleep(1_500)
+            val filledBefore = promptTotal(conn.buffer.visibleText())
+            cycleKeyboard(conn, cols, rows)
+            assertEquals("resize dropped the session", SshState.CONNECTED, conn.state.value)
+            after = conn.buffer.visibleText()
+            prompts = promptTotal(after)
+            typed = after.split("echo RESIZE_FULL").size - 1
+            Log.i("TabbyResizeTest", "phase B prompts $filledBefore->$prompts typed=$typed")
+            assertEquals("full-screen resize changed the prompt inventory", filledBefore, prompts)
+            assertEquals("full-screen resize duplicated the typed line", 1, typed)
+
             val truncated = after.lines().filter { it.startsWith("ome@") || it.startsWith("me@home") }
             assertTrue("resized lines lost their first character: $truncated", truncated.isEmpty())
         } finally {
@@ -99,6 +119,28 @@ class TerminalResizeLiveTest {
         }
     }
 
-    private fun promptLines(visible: String): Int =
-        visible.lines().count { it.trimEnd().endsWith("$") || it.trimEnd().endsWith("#") }
+    private fun cycleKeyboard(conn: SshConnection, cols: Int, rows: Int) {
+        // Three keyboard open/close cycles: shrink rows, let SIGWINCH +
+        // readline redraw settle, restore.
+        repeat(3) {
+            conn.buffer.resize(cols, rows - 12)
+            conn.setPtySize(cols, rows - 12)
+            Thread.sleep(1_500)
+            conn.buffer.resize(cols, rows)
+            conn.setPtySize(cols, rows)
+            Thread.sleep(1_500)
+        }
+        Thread.sleep(2_000)
+    }
+
+    /**
+     * Every prompt on screen, bare (`…$`) or holding unsubmitted input.
+     * Stable across typing (submit swaps one for the other) — only a real
+     * duplication changes the total.
+     */
+    private fun promptTotal(visible: String): Int =
+        visible.lines().count {
+            val t = it.trimEnd()
+            t.endsWith("$") || t.endsWith("#") || it.contains("RESIZE_TYPED") || it.contains("RESIZE_FULL")
+        }
 }

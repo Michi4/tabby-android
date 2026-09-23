@@ -51,6 +51,24 @@ const val SENDER_SENTINEL = "\uFEFF"
 data class SenderEdit(val sendText: String, val deletions: Int)
 
 /**
+ * Arrow-key sequence mirroring a pure cursor move (same text, collapsed
+ * selection only moved) to the remote line — this is what makes Gboard's
+ * spacebar-swipe move the server cursor. Null unless the move is safe to
+ * forward: identical text, both ends collapsed, non-negative, changed.
+ * One repeat per character step; the caller sends the sequence as-is (plain
+ * arrows, no modifiers — a cursor glide is never a modified key).
+ */
+fun cursorMoveArrows(oldText: String, oldPos: Int, newText: String, newPos: Int): String? {
+    if (oldText != newText) return null
+    if (oldPos < 0 || newPos < 0 || oldPos == newPos) return null
+    val step = if (newPos > oldPos) CURSOR_RIGHT else CURSOR_LEFT
+    return step.repeat(kotlin.math.abs(newPos - oldPos))
+}
+
+const val CURSOR_LEFT = "\u001B[D"
+const val CURSOR_RIGHT = "\u001B[C"
+
+/**
  * Maps one sender-field change to what must go over SSH. The field is reset
  * to [SENDER_SENTINEL] after every handled change, so `old` always contains
  * the sentinel and `new` is whatever the keyboard committed. Pure, tested.
